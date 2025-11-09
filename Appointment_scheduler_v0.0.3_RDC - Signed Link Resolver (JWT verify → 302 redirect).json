@@ -1,0 +1,102 @@
+{
+  "name": "Appointment_scheduler_v0.0.3_RDC - Signed Link Resolver (JWT verify → 302 redirect)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "s/:action",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2adf9dc3-90b1-4e21-b606-8a4d95f540e3",
+      "name": "Webhook (signed)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -400
+      ],
+      "webhookId": "5dc6515e-7dbb-4e04-b183-12cafc65b30d"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify JWT + Route + Browser-friendly POST bridge\nconst crypto = require('crypto');\n\nconst SECRET = 'thiscanbethestrongestpasswordicanset';\nconst BASE   = 'https://polarmedia.app.n8n.cloud';\n\n// --- helpers: b64url + JWT verify (HS256) ---\nconst b64url = (buf) => buf.toString('base64').replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');\nconst fromB64url = (s) => Buffer.from(String(s||'').replace(/-/g,'+').replace(/_/g,'/'), 'base64');\n\nfunction signHS256(header, payload, secret) {\n  const data = `${header}.${payload}`;\n  const sig = crypto.createHmac('sha256', secret).update(data).digest();\n  return b64url(sig);\n}\n\nfunction verifyJWT(token, secret) {\n  if (!token || token.split('.').length !== 3) throw new Error('Bad token');\n  const [h, p, s] = token.split('.');\n  const expSig = signHS256(h, p, secret);\n  if (s !== expSig) throw new Error('Bad signature');\n  const payload = JSON.parse(fromB64url(p).toString('utf8'));\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('Expired');\n  return payload;\n}\n\n// --- read inputs ---\nconst action = $json.params?.action || $json.query?.action || ''; // from /s/:action\nconst token  = $json.query?.t || '';\n\nlet payload;\ntry {\n  payload = verifyJWT(token, SECRET);\n} catch (e) {\n  return [{\n    json: {\n      status: 400,\n      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },\n      body: JSON.stringify({ ok:false, error: e.message })\n    }\n  }];\n}\n\nif (payload.action && String(payload.action).toLowerCase() !== String(action).toLowerCase()) {\n  return [{\n    json: {\n      status: 400,\n      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },\n      body: JSON.stringify({ ok:false, error: 'Action mismatch' })\n    }\n  }];\n}\n\n// --- HTML that POSTs JSON via fetch (so POST-only endpoints work from a browser) ---\nfunction htmlAutoPostJSON(url, fields) {\n  const bodyJson = JSON.stringify(fields || {});\n  return `<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Continuing…</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<style>\n  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;padding:24px}\n  pre{white-space:pre-wrap;word-break:break-word;background:#f6f8fa;padding:12px;border-radius:8px}\n</style>\n</head>\n<body>\n  <h3>Working…</h3>\n  <p>Please wait while we continue your request.</p>\n  <pre id=\"out\">Posting to ${url}…</pre>\n  <script>\n    (async () => {\n      try {\n        const res = await fetch(${JSON.stringify(url)}, {\n          method: 'POST',\n          headers: {'Content-Type': 'application/json'},\n          body: ${JSON.stringify(bodyJson)}\n        });\n        const text = await res.text();\n        document.getElementById('out').textContent =\n          'HTTP ' + res.status + '\\\\n\\\\n' + text;\n      } catch (e) {\n        document.getElementById('out').textContent = 'Error: ' + e;\n      }\n    })();\n  </script>\n</body></html>`;\n}\n\n// --- route mapping ---\nconst bookingId = payload.bookingId || '';\nconst phone     = payload.phone || '';\n\nlet status, headers, body;\n\nif (payload.action === 'reschedule') {\n  // Browser-friendly: serve HTML that POSTs JSON to your POST endpoint\n  const postUrl = `${BASE}/webhook/vapi/reschedule`;\n  body   = htmlAutoPostJSON(postUrl, { bookingId, phone });\n  status = 200;\n  headers = { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' };\n\n} else if (payload.action === 'cancel') {\n  // Same mechanism; include confirm:'yes' as per your cancel tool contract\n  const postUrl = `${BASE}/webhook/vapi/cancel`;\n  body   = htmlAutoPostJSON(postUrl, { bookingId, phone, confirm: 'yes' });\n  status = 200;\n  headers = { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' };\n\n} else if (payload.action === 'resume' || payload.action === 'confirm') {\n  // Safe to GET → classic 302 redirect\n  const dest = `${BASE}/webhook/vapi/${payload.action}?bookingId=${encodeURIComponent(bookingId)}`;\n  status  = 302;\n  headers = { 'Location': dest, 'Cache-Control': 'no-store' };\n  body    = '';\n\n} else {\n  status  = 400;\n  headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\n  body    = JSON.stringify({ ok:false, error: 'Unknown action' });\n}\n\nreturn [{ json: { status, headers, body } }];"
+      },
+      "id": "57ba4f59-6b14-498f-a14a-dec8bdf00129",
+      "name": "Code (Verify JWT)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.body || '' }}",
+        "options": {
+          "responseCode": "={{ $json.status || 302 }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Location",
+                "value": "={{ $json.headers?.Location || '' }}"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "={{ $json.headers?.['Cache-Control'] || 'no-store' }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "={{ $json.headers?.['Content-Type'] || '' }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "6f6f35f3-e41d-40cd-a10b-c4d183eb3ed7",
+      "name": "Respond (302 redirect)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        688,
+        -400
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook (signed)": {
+      "main": [
+        [
+          {
+            "node": "Code (Verify JWT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Verify JWT)": {
+      "main": [
+        [
+          {
+            "node": "Respond (302 redirect)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "023bad8f-0bcc-466a-bdaf-494b66a0e79a",
+  "meta": {
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "K83JrurzaRnUS4ea",
+  "tags": []
+}

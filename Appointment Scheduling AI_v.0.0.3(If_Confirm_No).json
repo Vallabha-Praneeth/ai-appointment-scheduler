@@ -1,0 +1,778 @@
+{
+  "name": "Appointment Scheduling AI_v.0.0.3(If_Confirm_No)",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "limit": 20,
+        "options": {}
+      },
+      "id": "ea56c921-8938-496a-a884-919cd03f29a5",
+      "name": "GCal (Find Alternative)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -624,
+        320
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0yByGfoje3gvnxgr",
+          "name": "Google Calendar account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// -------------------------------------------\n// Next Free Slot (with business-hours guard)\n// -------------------------------------------\n\n// --- Settings ---\nconst SLOT_MIN   = 30;  // desired duration\nconst STEP_MIN   = 15;  // search step\nconst SEARCH_DAYS = 14; // how far to search ahead\n\n// Business hours (America/Chicago)\nconst BIZ_TZ     = \"America/Chicago\";\nconst OPEN_MIN   = 10 * 60;           // 10:00\nconst CLOSE_MIN  = 18 * 60;           // 18:00\n\n// Round up Date to next step minutes\nfunction ceilToStep(date, stepMin) {\n  const d = new Date(date);\n  const m = d.getMinutes();\n  const add = (stepMin - (m % stepMin)) % stepMin;\n  d.setMinutes(m + add, 0, 0);\n  return d;\n}\n\n// Local-time helpers\nfunction minsLocal(iso, tz) {\n  const d = new Date(iso);\n  const parts = new Intl.DateTimeFormat('en-US', {\n    timeZone: tz, hour:'2-digit', minute:'2-digit', hour12:false\n  }).formatToParts(d);\n  const h = parseInt(parts.find(p=>p.type==='hour').value,10);\n  const m = parseInt(parts.find(p=>p.type==='minute').value,10);\n  return h*60 + m;\n}\nfunction ymdLocal(iso, tz) {\n  // en-CA gives YYYY-MM-DD\n  return new Intl.DateTimeFormat('en-CA', {\n    timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit'\n  }).format(new Date(iso));\n}\nfunction localIsoFromYmdAndMinutes(ymd, minutes) {\n  const hh = String(Math.floor(minutes/60)).padStart(2,'0');\n  const mm = String(minutes % 60).padStart(2,'0');\n  return `${ymd}T${hh}:${mm}:00`; // no Z; interpret with BIZ_TZ downstream\n}\n\n// Move a UTC cursor to OPEN_MIN of the *next* local business day\nfunction bumpToNextLocalOpen(cursor) {\n  // go +1 day in UTC\n  const next = new Date(cursor.getTime() + 24*60*60*1000);\n  // shift minutes so local time becomes OPEN_MIN\n  const mins = minsLocal(next.toISOString(), BIZ_TZ);\n  return new Date(next.getTime() + (OPEN_MIN - mins) * 60 * 1000);\n}\n\n// Base time to start searching from:\n// - if a desired start was passed in, use it\n// - otherwise, now rounded up to the next STEP_MIN\nconst desiredStart = $json.startIso\n  ? new Date($json.startIso)\n  : ceilToStep(new Date(), STEP_MIN);\n\nconst durationMs = SLOT_MIN * 60 * 1000;\n\n// Collect busy intervals from the GCal node feeding this one\nconst busy = $input.all()\n  .map(i => i.json)\n  .map(e => {\n    const s = e.start?.dateTime || e.start?.date;  // all-day events use .date\n    const t = e.end?.dateTime   || e.end?.date;\n    return (s && t) ? { start: new Date(s), end: new Date(t), allDay: !!e.start?.date } : null;\n  })\n  .filter(Boolean)\n  .sort((a, b) => a.start - b.start);\n\n// Helper: does [start,end) overlap any busy block?\nfunction overlapsAny(start, end) {\n  for (const b of busy) {\n    if (b.allDay) {\n      // block whole local day\n      const dayStart = new Date(b.start); dayStart.setHours(0,0,0,0);\n      const dayEnd   = new Date(b.end);   dayEnd.setHours(23,59,59,999);\n      if (start < dayEnd && end > dayStart) return true;\n      continue;\n    }\n    if (start < b.end && end > b.start) return true;\n  }\n  return false;\n}\n\n// Initialize cursor aligned to local business window\nlet cursor = ceilToStep(desiredStart, STEP_MIN);\n// If cursor before OPEN_MIN local, snap to OPEN_MIN; if after window, go to next day @ open.\nlet m = minsLocal(cursor.toISOString(), BIZ_TZ);\nif (m < OPEN_MIN) {\n  cursor = new Date(cursor.getTime() + (OPEN_MIN - m) * 60 * 1000);\n} else if (m > (CLOSE_MIN - SLOT_MIN)) {\n  cursor = bumpToNextLocalOpen(cursor);\n}\n\n// Limit for search horizon\nconst limit = new Date(desiredStart); limit.setDate(limit.getDate() + SEARCH_DAYS);\n\n// Sweep forward, enforcing business hours\nwhile (cursor <= limit) {\n  const startIso = cursor.toISOString();\n  const startMinsLocal = minsLocal(startIso, BIZ_TZ);\n\n  // if cursor slipped before open, snap; if beyond last start time, move to next day\n  if (startMinsLocal < OPEN_MIN) {\n    cursor = new Date(cursor.getTime() + (OPEN_MIN - startMinsLocal) * 60 * 1000);\n    continue;\n  }\n  if (startMinsLocal > (CLOSE_MIN - SLOT_MIN)) {\n    cursor = bumpToNextLocalOpen(cursor);\n    continue;\n  }\n\n  const candidateStart = new Date(cursor);\n  const candidateEnd   = new Date(candidateStart.getTime() + durationMs);\n  const endMinsLocal   = minsLocal(candidateEnd.toISOString(), BIZ_TZ);\n\n  // must end within business hours and avoid overlaps\n  if (endMinsLocal <= CLOSE_MIN && !overlapsAny(candidateStart, candidateEnd)) {\n    // Build outputs\n    const ymd = ymdLocal(candidateStart.toISOString(), BIZ_TZ);\n    const localStart = localIsoFromYmdAndMinutes(ymd, startMinsLocal);\n    const localEnd   = localIsoFromYmdAndMinutes(ymd, startMinsLocal + SLOT_MIN);\n\n    return [{\n      json: {\n        ...$json,\n        altFound: true,\n        // UTC ISOs (useful for logging)\n        altStartIso: candidateStart.toISOString(),\n        altEndIso:   candidateEnd.toISOString(),\n        // Local suggestion payload (use these in GCal Create Event with timeZone)\n        altSuggest: {\n          start: localStart,    // \"YYYY-MM-DDTHH:MM:00\" (no Z)\n          end:   localEnd,\n          tz:    BIZ_TZ\n        },\n        slotWithinHours: true,\n        BIZ_TZ\n      }\n    }];\n  }\n\n  // advance cursor by STEP_MIN\n  cursor.setMinutes(cursor.getMinutes() + STEP_MIN);\n}\n\n// If nothing found within horizon\nreturn [{\n  json: {\n    ...$json,\n    altFound: false,\n    slotWithinHours: false,\n    BIZ_TZ\n  }\n}];"
+      },
+      "id": "30ceff05-e61b-4015-9f05-caceb2792441",
+      "name": "Code (Next Free Slot)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1pPJv4c64RwSunmyt2TmvlfDZrn7i0ECujbWuxw669YE",
+          "mode": "list",
+          "cachedResultName": "Appointments",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1pPJv4c64RwSunmyt2TmvlfDZrn7i0ECujbWuxw669YE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1pPJv4c64RwSunmyt2TmvlfDZrn7i0ECujbWuxw669YE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.Name }}",
+            "Phone": "={{ $json.Phone }}",
+            "Email": "={{ $json.Email }}",
+            "Notes": "={{ (($json.description || $json.summary || '').includes('(ALT)') ? 'Booked ALT' : 'Booked MAIN') }}",
+            "Start Time": "={{ $json['Start Time'] }}",
+            "End Time": "={{ $json['End Time'] }}",
+            "Calendar TZ": "={{ $json['Calendar TZ'] }}",
+            "Source": "={{ ($json.description || $json.summary || '').includes('(ALT)') ? 'ALT' : 'MAIN' }}",
+            "Calendar Link": "={{ $json.calendarUrl || '' }}",
+            "Booking ID": "={{ $json.bookingId }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Start Time",
+              "displayName": "Start Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "End Time",
+              "displayName": "End Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Calendar TZ",
+              "displayName": "Calendar TZ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Calendar Link",
+              "displayName": "Calendar Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Booking ID",
+              "displayName": "Booking ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "87cc4a13-74e8-4e87-977a-0e9fa2d7553b",
+      "name": "Sheets (Log Appointment)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        656,
+        256
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "NUwTYShhDFkihuou",
+          "name": "my_qops"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6ad7896d-bfcd-403c-9a91-1958bcc166c2",
+              "leftValue": "={{ $json.altConfirm === 'yes' && $json.slotWithinHours === true && !!$json.altSuggest }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -224,
+        320
+      ],
+      "id": "0649ff69-30df-4448-8281-8a1bab329c6e",
+      "name": "IF Confirm (Alt)"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "start": "={ \"dateTime\": \"={{ $json.altSuggest.start }}\", \"timeZone\": \"America/Chicago\" }",
+        "end": "={ \"dateTime\": \"={{ $json.altSuggest.end }}\", \"timeZone\": \"America/Chicago\" }",
+        "additionalFields": {
+          "description": "={{ $json.notes || '' }}",
+          "summary": "={{ \"Name: \" + $json.name + \"\\nPhone: \" + $json.phone + \"\\nEmail: \" + $json.email }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "18e30d93-7483-465e-909a-911685bec535",
+      "name": "GCal (Book Alt Event)",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0yByGfoje3gvnxgr",
+          "name": "Google Calendar account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b149636d-72f9-482a-babb-111d70b5e65c",
+              "name": "result",
+              "value": "booked",
+              "type": "string"
+            },
+            {
+              "id": "dab5bc6e-96fe-4109-a495-2cf03d2f3885",
+              "name": "slot.start",
+              "value": "={{$json[\"start\"][\"dateTime\"] ?? $json[\"start\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "01311cbd-3d46-416d-8b28-0ed522a6a391",
+              "name": "slot.end",
+              "value": "={{$json[\"end\"][\"dateTime\"] ?? $json[\"end\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "91983793-bfd8-473e-b0c8-d39ee6793abe",
+              "name": "slot.timezone",
+              "value": "={{$json[\"start\"][\"timeZone\"] ?? \"America/Chicago\"}}",
+              "type": "string"
+            },
+            {
+              "id": "cfc2162c-8471-4431-91b0-0e7cd34f203c",
+              "name": "title",
+              "value": "={{$json[\"summary\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "431f1024-555c-468c-9872-1b62aa8bb085",
+              "name": "bookingId",
+              "value": "={{$json[\"id\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "c7d6e19d-2902-484b-bd50-12c84b4d5415",
+              "name": "calendarUrl",
+              "value": "={{$json[\"htmlLink\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "8b5e2580-d830-4622-87b1-a8b251b33e43",
+              "name": "notes",
+              "value": "={{ $json.description || $item(0).$node[\"Code (Next Free Slot)\"].json.notes || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "71b9182d-8b13-4a0c-9bf9-b0aaff477e21",
+              "name": "name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "110d9f1a-837c-42ce-8174-d60d17fc9193",
+              "name": "phone",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "0a0faf0f-bf72-495e-873c-9a6af03cdbd6",
+              "name": "email",
+              "value": "={{ $json.email }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        208,
+        0
+      ],
+      "id": "9a35f329-c33e-4e90-a23a-afe56d0881c3",
+      "name": "Format tool result (BOOKED ALT)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c9854bb7-6105-471c-877e-795426991ba8",
+              "name": "result",
+              "value": "no_free_slot",
+              "type": "string"
+            },
+            {
+              "id": "8ed35583-5a28-49df-9314-213a548e8e48",
+              "name": "alternatives",
+              "value": "={{\n  ($json.altSuggest?.start && $json.altSuggest?.end)\n    ? [{ start: $json.altSuggest.start, end: $json.altSuggest.end, timezone: \"America/Chicago\" }]\n    : ($json.altStartIso && $json.altEndIso)\n      ? [{ start: $json.altStartIso, end: $json.altEndIso, timezone: \"America/Chicago\" }]\n      : []\n}}",
+              "type": "array"
+            },
+            {
+              "id": "06ee9757-bdb4-404a-8d9f-ba83614509d1",
+              "name": "reason",
+              "value": "user_declined",
+              "type": "string"
+            },
+            {
+              "id": "940cac4c-614f-4345-834e-2d666e68f36c",
+              "name": "message",
+              "value": "={{   $json.startIso     ? 'You declined ' + $json.startIso + '. Suggesting an alternative within business hours.'     : 'Suggesting an alternative within business hours.' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        16,
+        448
+      ],
+      "id": "8d2a9c01-adc3-4250-906f-29b156db3af2",
+      "name": "Format tool result (NO SLOT)"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -992,
+        320
+      ],
+      "id": "68a768db-5aee-4484-a838-58fede7576ae",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base =\n  $json.reason === \"outside_business_hours\"\n    ? \"That time is outside our business hours (10:00–18:00).\"\n    : $json.reason === \"calendar_conflict\"\n      ? \"That time is already booked.\"\n      : ($json.assistantPrompt || \"No worries — please share a time.\");\n\nlet reply = base + \" Please share another time within 10:00–18:00.\";\n\nif ($json.altSuggest?.start && $json.altSuggest?.end) {\n  reply += `\\n\\nEarliest available: ${$json.altSuggest.start}–${$json.altSuggest.end} (${ $json.altSuggest.tz }). Reply \"yes\" to confirm.`;\n}\n\n// make it explicit that we are waiting for confirmation\nreturn [{\n  json: {\n    ...$json,\n    reply,\n    altConfirm: \"pending\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -816,
+        320
+      ],
+      "id": "cb0001be-e97b-48bf-b0c1-95d4a449fccb",
+      "name": "Build Response: Missing Time"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "605cc5df-4f69-48b3-8cfd-b727d4318b5e",
+              "name": "result",
+              "value": "booked",
+              "type": "string"
+            },
+            {
+              "id": "88c01aff-1ef2-47d6-ad4f-4cd128926b0d",
+              "name": "Name",
+              "value": "={{ $json.name || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "4ff2321b-2f2e-4748-9075-f74832458fca",
+              "name": "Phone",
+              "value": "={{ $json.phone || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "21c0fa32-ef13-4e27-a1d4-c92010301506",
+              "name": "Email",
+              "value": "={{ $json.email || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "d4be8195-8bb9-4de8-a0e1-56266eb16c7c",
+              "name": "Start Time",
+              "value": "={{ $json.slot.start }}",
+              "type": "string"
+            },
+            {
+              "id": "701e210c-a164-49e2-ae8b-107256fb5d40",
+              "name": "End Time",
+              "value": "={{ $json.slot.end }}",
+              "type": "string"
+            },
+            {
+              "id": "b1420bfe-c863-42db-a5bf-9570c8810f2b",
+              "name": "Calendar TZ",
+              "value": "={{ $json.slot.timezone }}",
+              "type": "string"
+            },
+            {
+              "id": "02cbeed2-e725-4d22-922e-3fb860797830",
+              "name": "calendarUrl",
+              "value": "={{ $json.calendarUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "fea008f8-dfd4-4318-894b-ce9c6a849c8c",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "28726108-def2-41f2-a76c-88584362c318",
+              "name": "bookingId",
+              "value": "={{ $json.bookingId }}",
+              "type": "string"
+            },
+            {
+              "id": "74239b41-c1c1-40d2-aa22-bbb01b135cbb",
+              "name": "notes",
+              "value": "={{ $json.description || $item(0).$node[\"Code (Next Free Slot)\"].json.notes || \"\" }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        416,
+        0
+      ],
+      "id": "56d94aff-1dd1-4f0e-9060-6157d764d935",
+      "name": "Return (ALT)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7dbc0148-fe5e-43d7-a7dd-2eba7353ad6e",
+              "name": "result",
+              "value": "no_free_slot",
+              "type": "string"
+            },
+            {
+              "id": "628423b3-1ed6-42dd-bba2-adc8fb121645",
+              "name": "reason",
+              "value": "={{$json.reason ?? 'user_declined'}}",
+              "type": "string"
+            },
+            {
+              "id": "ffabbc5f-a84f-4d41-a21d-4ca118fd1ce3",
+              "name": "=message",
+              "value": "={{$json.message ?? 'Suggesting an alternative within business hours.'}}",
+              "type": "string"
+            },
+            {
+              "id": "acbb19b7-cf3e-40b9-801a-a1d02ebda847",
+              "name": "alternatives",
+              "value": "={{\n  Array.isArray($json.alternatives)\n    ? $json.alternatives\n    : (\n        typeof $json.alternatives === 'object' && $json.alternatives?.alternatives\n          ? $json.alternatives.alternatives\n          : []\n      )\n}}",
+              "type": "array"
+            },
+            {
+              "id": "8d2bddd4-42af-4291-909d-0ab8ebfe1997",
+              "name": "carry.name",
+              "value": "={{ ($json.description?.match(/Name:\\s*([^\\n\\r]+)/i)?.[1] || '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "ddc45cc4-cd0b-4b5c-adb7-591593c74861",
+              "name": "carry.email",
+              "value": "={{ ($json.description?.match(/Email:\\s*([^\\s\\n\\r]+)/i)?.[1] || '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "690b347d-1615-4ca5-819c-ec7faed5aaa8",
+              "name": "carry.phone",
+              "value": "={{ ($json.description?.match(/Phone:\\s*([0-9+\\-\\s()]+)/i)?.[1] || '').trim() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        448
+      ],
+      "id": "1ffcdf82-15fb-48d9-b8f1-6d98d351032c",
+      "name": "Return (NO SLOT)"
+    },
+    {
+      "parameters": {
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        624,
+        0
+      ],
+      "id": "2916f2f2-a5cc-4f39-be31-82ab0c4ee214",
+      "name": "Return (END)"
+    },
+    {
+      "parameters": {
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        448
+      ],
+      "id": "235c43f6-3310-406c-88a0-0d07a0e3461e",
+      "name": "Return (END NO SLOT)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -448,
+        624
+      ],
+      "id": "21916b44-4f9a-43e5-98e5-44f748e04e78",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        64,
+        256
+      ],
+      "id": "94aa6ae3-72c3-4b4c-9b98-4d12bda19518",
+      "name": "Merge1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "GCal (Find Alternative)": {
+      "main": [
+        [
+          {
+            "node": "Code (Next Free Slot)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Next Free Slot)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Sheets (Log Appointment)": {
+      "main": [
+        []
+      ]
+    },
+    "IF Confirm (Alt)": {
+      "main": [
+        [
+          {
+            "node": "GCal (Book Alt Event)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format tool result (NO SLOT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal (Book Alt Event)": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Format tool result (BOOKED ALT)": {
+      "main": [
+        [
+          {
+            "node": "Return (ALT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format tool result (NO SLOT)": {
+      "main": [
+        [
+          {
+            "node": "Return (NO SLOT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Build Response: Missing Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response: Missing Time": {
+      "main": [
+        [
+          {
+            "node": "GCal (Find Alternative)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return (ALT)": {
+      "main": [
+        [
+          {
+            "node": "Return (END)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sheets (Log Appointment)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return (NO SLOT)": {
+      "main": [
+        [
+          {
+            "node": "Return (END NO SLOT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "IF Confirm (Alt)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Format tool result (BOOKED ALT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f9ac2ea3-e35c-4742-9da7-f4d634486f64",
+  "meta": {
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "kgC45JudCnRGR6gV",
+  "tags": []
+}

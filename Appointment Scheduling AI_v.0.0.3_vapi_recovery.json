@@ -1,0 +1,202 @@
+{
+  "name": "Appointment Scheduling AI_v.0.0.3_vapi_recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi/recover",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "cd3574fb-86ae-4e1f-a5e7-31d99c7899bc",
+      "name": "Webhook (recover)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        -16
+      ],
+      "webhookId": "a759b7a7-f679-4a7f-b7c4-1cbad0d0840e"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decide Recovery (SIGNED LINKS)\nconst SECRET = 'thiscanbethestrongestpasswordicanset';\nconst TOKEN_TTL_SEC = 900; // 15 minutes\n\nconst inb = ($json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst STAGE = String(inb.stage || '').toLowerCase();\nconst phoneRaw = String(inb.phone || '').trim();\nconst bookingId = String(inb.bookingId || '').trim();\nconst name = String(inb.name || '').trim();\nconst email = String(inb.email || '').trim();\nconst carry = inb.carry || {};\n\nconst toE164ish = s => (s || '').replace(/(?!^\\+)[^\\d]/g, '');\nconst to = toE164ish(phoneRaw) || phoneRaw;\n\nconst crypto = require('crypto');\nconst b64url = (buf) => buf.toString('base64').replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');\n\nfunction signJWT(payload, secret, ttlSec = TOKEN_TTL_SEC) {\n  const header = { alg: 'HS256', typ: 'JWT' };\n  const now = Math.floor(Date.now()/1000);\n  const body = { ...payload, iat: now, exp: now + ttlSec };\n  const encHeader = b64url(Buffer.from(JSON.stringify(header)));\n  const encPayload = b64url(Buffer.from(JSON.stringify(body)));\n  const data = encHeader + '.' + encPayload;\n  const sig = b64url(crypto.createHmac('sha256', secret).update(data).digest());\n  return data + '.' + sig;\n}\n\nconst SBASE = 'https://polarmedia.app.n8n.cloud/webhook/5dc6515e-7dbb-4e04-b183-12cafc65b30d/s';\n\nfunction signedUrl(action, extra) {\n  const token = signJWT({ action, ...extra }, SECRET);\n  return `${SBASE}/${action}?t=${encodeURIComponent(token)}`;\n}\n\nconst resumeUrl = signedUrl('resume', { phone: to || undefined });\nconst cancelUrl = bookingId \n  ? signedUrl('cancel', { bookingId, phone: to || undefined }) \n  : signedUrl('cancel', { phone: to || undefined });\nconst rescheduleUrl = bookingId \n  ? signedUrl('reschedule', { bookingId, phone: to || undefined }) \n  : signedUrl('reschedule', { phone: to || undefined });\nconst confirmUrl = bookingId \n  ? signedUrl('confirm', { bookingId, phone: to || undefined }) \n  : '';\n\nfunction lineResume(c) {\n  const t = c.title ? `\"${c.title}\"` : 'your appointment';\n  const when = (c.startIso && c.timezone) ? ` for ${c.startIso} ${c.timezone}` : '';\n  return `You can resume ${t}${when}: ${resumeUrl}`;\n}\n\nfunction lineCancel() { return `To cancel now, tap: ${cancelUrl}`; }\nfunction lineResched() { return `To reschedule, tap: ${rescheduleUrl}`; }\n\nlet body;\nswitch (STAGE) {\n  case 'confirm':\n    body = [`We got disconnected while confirming your slot.`, lineResume(carry), `If you meant to cancel instead: ${cancelUrl}`].join(' ');\n    break;\n  case 'reschedule':\n    body = [`We got disconnected during rescheduling.`, lineResched(), `Or resume: ${resumeUrl}`].join(' ');\n    break;\n  case 'cancel':\n    body = [`We got disconnected during cancellation.`, lineCancel(), carry.title ? `(${carry.title})` : ''].join(' ');\n    break;\n  case 'new':\n  default:\n    body = [`We got disconnected while scheduling.`, lineResume(carry), `Need to reschedule or cancel an existing booking? Use: ${resumeUrl}`].join(' ');\n    break;\n}\n\nconst action = to ? 'send_sms' : 'silent_ok';\n\nreturn [{\n  json: {\n    action,\n    sms: to ? { to, body } : null,\n    links: { confirmUrl, cancelUrl, rescheduleUrl, resumeUrl },\n    message: 'Recovery instructions (signed) prepared.'\n  }\n}];"
+      },
+      "id": "c9c4f41a-75a1-4c31-9f3e-ba926fe801e0",
+      "name": "Code (Decide Recovery)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "f7eeb7c2-660a-4bc9-bd4f-b33426cb0c6c",
+              "leftValue": "={{$json.action === 'send_sms'}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1e502387-8b62-4b8e-b689-0c488aa3300a",
+      "name": "IF (Need SMS?)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ JSON.stringify({ result: 'ok', sent: $json.action === 'send_sms', links: $json.links }) }}",
+        "options": {}
+      },
+      "id": "f21a4f61-659b-4d7a-90ba-6c3315d4ef5b",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        32,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "from": "+12542800366",
+        "to": "={{$json.sms.to}}",
+        "message": "={{$json.sms.body}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        32,
+        96
+      ],
+      "id": "0bd823f9-d711-4e56-91c3-0768c2e4d1ea",
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "credentials": {
+        "twilioApi": {
+          "id": "seXtNTssV0vIqTCu",
+          "name": "Twilio account Full"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "Webhook (recover)": [
+      {
+        "json": {
+          "headers": {
+            "host": "polarmedia.app.n8n.cloud",
+            "user-agent": "curl/8.7.1",
+            "content-length": "132",
+            "accept": "*/*",
+            "accept-encoding": "gzip, br",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "2405:201:c001:7061:f80f:665f:5896:212e",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "IN",
+            "cf-ray": "99a2c95b170169b3-BOM",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "x-forwarded-for": "2405:201:c001:7061:f80f:665f:5896:212e, 162.158.227.47",
+            "x-forwarded-host": "polarmedia.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-18-7959cfc789-ngln9",
+            "x-is-trusted": "yes",
+            "x-real-ip": "2405:201:c001:7061:f80f:665f:5896:212e"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "stage": "reschedule",
+            "links": [
+              "reschedule",
+              "cancel"
+            ],
+            "bookingId": "TEST_DEMO_123",
+            "phone": "+919999999999",
+            "timezone": "Asia/Kolkata"
+          },
+          "webhookUrl": "https://polarmedia.app.n8n.cloud/webhook/vapi/recover",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Webhook (recover)": {
+      "main": [
+        [
+          {
+            "node": "Code (Decide Recovery)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Decide Recovery)": {
+      "main": [
+        [
+          {
+            "node": "IF (Need SMS?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF (Need SMS?)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f8ca4abb-1410-45eb-adf4-392a27e6881d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "T99jvh53fRMKCWUY",
+  "tags": []
+}
