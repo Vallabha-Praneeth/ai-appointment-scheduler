@@ -26,26 +26,33 @@ This is an AI-powered appointment scheduling system built on **n8n** workflow au
 
 ## Working with n8n Workflows
 
-**Workflow files are JSON exports** stored in `appointment_scheduler/` directory. There's no traditional build process.
+**Workflow files are JSON exports** stored in `Appointment_scheduler/` directory. There's no traditional build process.
 
 **To import/update workflows:**
 1. Log into the n8n instance at `https://polarmedia.app.n8n.cloud`
 2. Import the JSON file via n8n UI
 3. Activate the workflow
 
-**Main workflow:** `Appointment Scheduling AI_v.0.0.3 (Prod).json`
+**Main workflow:** `Appointment Scheduling AI_v.0.0.3.json`
 
 **Sub-workflows for specific operations:**
-- `vapi_lookup.json` - Find existing appointments
-- `vapi_cancel.json` - Cancel appointments
-- `vapi_reschedule.json` - Reschedule appointments
-- `vapi_recovery.json` - Handle disconnected/incomplete calls
+- `Appointment Scheduling AI_v.0.0.3_vapi_lookup.json` - Find existing appointments
+- `Appointment Scheduling AI_v.0.0.3_vapi_cancel-2.json` - Cancel appointments
+- `Appointment Scheduling AI_v.0.0.3_vapi_reschedule-2.json` - Reschedule appointments
+- `Appointment Scheduling AI_v.0.0.3_vapi_recovery.json` - Handle disconnected/incomplete calls
+
+**Additional workflows:**
+- `Appointment Scheduling AI v.0.0.3 (Check Availability).json` - Check calendar availability for requested time slots
+- `Appointment Scheduling AI v.0.0.3 (Group Booking).json` - Handle group/multi-person bookings
+- `Appointment Scheduling AI_v.0.0.3 (If_Confrim_yes).json` - Confirmation flow when user confirms action
+- `Appointment Scheduling AI_v.0.0.3(If_Confirm_No).json` - Confirmation flow when user declines action
+- `Appointment_scheduler_v0.0.3_RDC – Signed Link Resolver (JWT verify → 302 redirect).json` - JWT token verification and secure redirect handling
 
 **Webhook endpoints pattern:** `https://polarmedia.app.n8n.cloud/webhook/vapi/{operation}`
 
 ## Vapi Configuration
 
-**Configuration files in `appointment_scheduler/vapi/`:**
+**Configuration files** (referenced but not included in repo):
 - `vapi-assistant.json` - Defines the AI assistant's persona, voice (Elliot), system prompts, and conversation policies
 - `vapi-tools.json` - Defines the function tools (schemas) that the assistant can call
 
@@ -86,15 +93,28 @@ This is an AI-powered appointment scheduling system built on **n8n** workflow au
 - `stage` - Current flow: "new" | "confirm" | "reschedule" | "cancel"
 - `carry` - Pending booking details: {title, startIso, endIso, timezone}
 
+**Phone normalization** (in lookup/cancel/recovery workflows):
+- Extracts digits and generates multiple variants (full E.164, last 10 digits, last 7 digits)
+- Supports US/CA (+1) and IN (+91) country codes
+- Validates: minimum 7 digits, maximum 15 (E.164 spec)
+
+**Lookup matching priority:**
+1. Booking ID (calendar event ID or iCalUID)
+2. Phone (full digits, then last 10 fallback)
+3. Name (substring match in summary/description)
+
 ## Environment Variables & Secrets
 
 **Critical configuration should be externalized** (currently hardcoded in workflows):
 
 - `GOOGLE_CALENDAR_ID` - Currently: `quantumops9@gmail.com`
 - `TWILIO_PHONE_NUMBER` - Currently: `+14694365607`
-- `JWT_SECRET` - Used in JWT token verification in recovery workflow
+- `JWT_SECRET` - Used in JWT token verification in recovery workflow (HS256 algorithm, 15-min token TTL)
 - `N8N_INSTANCE_URL` - Currently: `https://polarmedia.app.n8n.cloud`
 - `WEBHOOK_SECRET` - For securing webhook endpoints (not yet implemented)
+- `BUSINESS_OPEN_HOUR` - Currently: 10
+- `BUSINESS_CLOSE_HOUR` - Currently: 18
+- `TOKEN_TTL_SEC` - Currently: 900 (15 minutes)
 
 **Security note:** Webhook endpoints currently have no authentication. Production deployment should add webhook secret verification in the first Code node after webhook trigger.
 
@@ -164,3 +184,24 @@ See `Project_Workflow.md` for detailed implementation instructions on:
 ## Sample Python Script
 
 `appointment_manager.py` - A basic Python example demonstrating appointment cancellation logic. Not part of the production system; used for reference/prototyping.
+
+## Vapi Message Format
+
+**Incoming webhook payload from Vapi:**
+```json
+{
+  "body": {
+    "message": {
+      "toolCalls": [{
+        "id": "call_abc123",
+        "function": {
+          "name": "function_tool",
+          "arguments": "{...}"
+        }
+      }]
+    }
+  }
+}
+```
+
+**Note:** Arguments can be JSON string or object depending on Vapi version.
