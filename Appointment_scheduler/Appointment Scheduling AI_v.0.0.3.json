@@ -1,0 +1,1632 @@
+{
+  "name": "Appointment Scheduling AI_v.0.0.3",
+  "nodes": [
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "timeMin": "={{ $json.startIso }}",
+        "timeMax": "={{ $json.endIso }}",
+        "options": {}
+      },
+      "id": "b64767c5-4661-44fb-86ab-9897cd1b40b1",
+      "name": "GCal (Check Availability)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -1904,
+        144
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0yByGfoje3gvnxgr",
+          "name": "Google Calendar account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// -------------------------------------------\n// Availability + Business Hours guard (single place)\n// -------------------------------------------\n\n// Pull Availability result from GCal node (boolean) if present\nconst gcalItems = $items(\"GCal (Check Availability)\") || [];\nconst availFromNode = gcalItems.find(i => typeof i.json?.available === \"boolean\")?.json?.available;\n\n// Requested slot & TZ\nconst tz = $json.tz || \"America/Chicago\";\nconst reqStartIso = $json.startIso;\nconst reqEndIso   = $json.endIso;\nconst reqStart = new Date(reqStartIso);\nconst reqEnd   = new Date(reqEndIso);\n\n// Business hours (10:00–18:00 local)\nconst OPEN_MIN  = 10 * 60;\nconst CLOSE_MIN = 18 * 60;\n\n// Helpers\nfunction minsLocal(iso, tz) {\n  const d = new Date(iso);\n  const parts = new Intl.DateTimeFormat('en-US', {\n    timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false\n  }).formatToParts(d);\n  const h = parseInt(parts.find(p => p.type === 'hour').value, 10);\n  const m = parseInt(parts.find(p => p.type === 'minute').value, 10);\n  return h * 60 + m;\n}\nfunction fmtLocal(iso, tz) {\n  return new Intl.DateTimeFormat('en-US', {\n    timeZone: tz,\n    year:'numeric', month:'2-digit', day:'2-digit',\n    hour:'2-digit', minute:'2-digit', hour12:false\n  }).format(new Date(iso));\n}\n\nconst startM = minsLocal(reqStartIso, tz);\nconst endM   = minsLocal(reqEndIso, tz);\nconst withinBusinessHours = (startM >= OPEN_MIN) && (endM <= CLOSE_MIN);\nconst localStart = fmtLocal(reqStartIso, tz);\nconst localEnd   = fmtLocal(reqEndIso, tz);\n\n// If Availability op gave us a boolean, trust it and AND with hours.\nif (typeof availFromNode === \"boolean\") {\n  const available = availFromNode && withinBusinessHours;\n  const reason =\n    !withinBusinessHours ? \"outside_business_hours\" :\n    (availFromNode === false ? \"calendar_conflict\" : undefined);\n\n  return [{\n    json: {\n      ...$json,\n      available,\n      businessHours: { tz, open: \"10:00\", close: \"18:00\", withinBusinessHours },\n      reason,\n      localStart,\n      localEnd,\n      conflicts: [] // Availability op doesn't return events\n    }\n  }];\n}\n\n// --------- Fallback path (if you switch to \"Get Events\") ----------\nfunction overlaps(aStart, aEnd, bStart, bEnd) {\n  return (aEnd.getTime() > bStart.getTime()) && (aStart.getTime() < bEnd.getTime());\n}\nfunction isPlaceholder(ev) {\n  const sum  = (ev.summary || \"\").trim();\n  const desc = (ev.description || \"\").toLowerCase();\n  const isSelf = ev.creator?.self === true;\n  return isSelf && (desc.includes(\"appointment (alt)\") || sum.startsWith(\"Name:\"));\n}\n\nconst conflicts = gcalItems\n  .map(i => i.json || {})\n  .filter(ev => {\n    if (isPlaceholder(ev)) return false;\n    const s = new Date(ev.start?.dateTime || ev.start || NaN);\n    const e = new Date(ev.end?.dateTime   || ev.end   || NaN);\n    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return false;\n    return overlaps(reqStart, reqEnd, s, e);\n  });\n\nconst available = (conflicts.length === 0) && withinBusinessHours;\nconst reason =\n  !withinBusinessHours ? \"outside_business_hours\" :\n  (conflicts.length ? \"calendar_conflict\" : undefined);\n\nreturn [{\n  json: {\n    ...$json,\n    available,\n    businessHours: { tz, open: \"10:00\", close: \"18:00\", withinBusinessHours },\n    reason,\n    localStart,\n    localEnd,\n    conflicts\n  }\n}];"
+      },
+      "id": "e71e701e-784b-47c2-a3e8-082f14a8cf9d",
+      "name": "Code (Availability Flag)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1456,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "55a94a4f-2629-4f29-b4e4-1b2935e9593d",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a258bf2c-e472-48d4-be93-08ca8d34b94e",
+      "name": "IF Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1264,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "hour": 18
+            }
+          ]
+        }
+      },
+      "id": "f67ad4dd-1e16-4de1-aefd-06de22e70adf",
+      "name": "Cron (Day Before)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -2368,
+        688
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "hour": 8
+            }
+          ]
+        }
+      },
+      "id": "902918b0-da37-4f3f-9f95-c8683213cadb",
+      "name": "Cron (Same Day)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -2352,
+        992
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "praneeth@quantum-ops.com",
+          "mode": "list",
+          "cachedResultName": "praneeth@quantum-ops.com"
+        },
+        "returnAll": true,
+        "timeMin": "={{ new Date(Date.now()+24*60*60*1000).toISOString().slice(0,10) + 'T00:00:00.000Z' }}",
+        "timeMax": "={{ new Date(Date.now()+24*60*60*1000).toISOString().slice(0,10) + 'T23:59:59.000Z' }}",
+        "options": {}
+      },
+      "id": "2defc96b-82df-43b0-8ece-1931678ba7c7",
+      "name": "GCal (Events Tomorrow)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -1984,
+        688
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "q8VNLUCeX67n7Bbs",
+          "name": "Qops"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "praneeth@quantum-ops.com",
+          "mode": "list",
+          "cachedResultName": "praneeth@quantum-ops.com"
+        },
+        "returnAll": true,
+        "timeMin": "={{ new Date().toISOString().slice(0,10) + 'T00:00:00.000Z' }}",
+        "timeMax": "={{ new Date().toISOString().slice(0,10) + 'T23:59:59.000Z' }}",
+        "options": {}
+      },
+      "id": "2236bf6d-0ccc-4b7d-a2e8-f2b1b4aaf6e9",
+      "name": "GCal (Events Today)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -1984,
+        992
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "q8VNLUCeX67n7Bbs",
+          "name": "Qops"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// === SETTINGS ===\nconst TZ = 'America/Chicago';\nconst LOCALE = 'en-US';\n\n// --- helpers ---\nconst firstLine = s => (s || '').split('\\n')[0];\n\nfunction findPhone(ev) {\n  const blob = [ev.summary || '', ev.description || ''].join('\\n');\n  const m = blob.match(/phone\\s*[:\\-]?\\s*([+()\\-.\\s\\d]{7,})/i);\n  return m ? m[1] : '';\n}\n\nfunction toE164(raw) {\n  if (!raw) return '';\n  let d = raw.replace(/[^\\d+]/g, '');      // keep + and digits\n  if (d.startsWith('+')) return d;\n  // US default if 10 or 11 digits without +\n  if (d.length === 10) return '+1' + d;\n  if (d.length === 11 && d[0] === '1') return '+' + d;\n  return d; // let non-US (e.g. +91) pass through if already had +\n}\n\nfunction dayKey(date) {\n  // stable YYYY-MM-DD string in TZ\n  return date.toLocaleDateString('en-CA', { timeZone: TZ });\n}\n\nfunction whenLabel(dt) {\n  const t = new Date(dt);\n  const dKey = dayKey(t);\n  const today = dayKey(new Date());\n  const tomorrow = dayKey(new Date(Date.now() + 86400000));\n\n  const timePart = t.toLocaleString(LOCALE, {\n    timeZone: TZ,\n    hour: 'numeric',\n    minute: '2-digit',\n    timeZoneName: 'short',\n  });\n  const datePart = t.toLocaleDateString(LOCALE, {\n    timeZone: TZ,\n    weekday: 'short',\n    month: 'short',\n    day: 'numeric',\n  });\n\n  if (dKey === today) return `today at ${timePart}`;\n  if (dKey === tomorrow) return `tomorrow at ${timePart}`;\n  return `on ${datePart} at ${timePart}`;\n}\n\n// --- build messages ---\nconst out = [];\n\nfor (const it of items) {\n  const ev = it.json || {};\n\n  // event start: dateTime (timed) or date (all-day)\n  const startIso =\n    ev.start?.dateTime ||\n    (ev.start?.date ? `${ev.start.date}T00:00:00Z` : null);\n\n  if (!startIso) continue; // nothing to remind\n\n  // Subject: prefer a clean one-liner\n  let subject = firstLine(ev.summary);\n  // If description looks like \"Appointment (ALT): Name\", make that nicer\n  const alt = (ev.description || '').match(/appointment.*?:\\s*(.+)/i);\n  if ((!subject || /name:\\s*/i.test(subject)) && alt) {\n    subject = `Appointment: ${alt[1]}`;\n  }\n  if (!subject) subject = 'Appointment';\n\n  // phone: summary -> description -> (skip if missing)\n  const to = toE164(findPhone(ev));\n  if (!to || !/^\\+\\d{10,15}$/.test(to)) continue;\n\n  const when = whenLabel(startIso);\n\n  out.push({\n    json: {\n      to,\n      body: `Reminder: ${subject} ${when}. Reply YES to confirm or NO to reschedule.`,\n    },\n  });\n}\n\nreturn out;"
+      },
+      "id": "2e5f2883-4f44-4a50-b8b7-0935a924fd8d",
+      "name": "Code (Build SMS)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1600,
+        848
+      ]
+    },
+    {
+      "parameters": {
+        "from": "+14694365607",
+        "to": "={{ $json.to }}",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "65b389fb-63b4-4562-97e7-9e1452d52ea8",
+      "name": "Twilio (Send SMS)",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        -1312,
+        848
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "seXtNTssV0vIqTCu",
+          "name": "Twilio account Full"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "88622cc8-204b-4ff4-b8a8-e45f344e2658",
+              "leftValue": "={{ ($json.confirm ?? $json.output?.confirm ?? '').toString().trim().toLowerCase() }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -880,
+        0
+      ],
+      "id": "aec02fd0-08d2-4ee9-bc88-6d2a3411044a",
+      "name": "If Confirm"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------- TIME WINDOW (America/Chicago aware) ----------\nconst TZ = $json.tz || 'America/Chicago';\n\n// Treat as ISO only if it has Z or an explicit offset\nconst isIsoZoned = s =>\n  typeof s === 'string' &&\n  /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+\\-]\\d{2}:\\d{2})$/.test(s?.trim?.() ?? '');\n\n// Helper: convert a JS Date that represents a *wall time* to the UTC instant\nfunction wallInTzToUtcISO(wallDate, timeZone) {\n  const inv = new Date(wallDate.toLocaleString('en-US', { timeZone }));\n  const diff = wallDate.getTime() - inv.getTime();\n  return new Date(wallDate.getTime() - diff).toISOString();\n}\n\n// Helper: now in Chicago (components)\nfunction nowPartsInTz(timeZone) {\n  const now = new Date();\n  const fmt = new Intl.DateTimeFormat('en-CA', {\n    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',\n    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false\n  });\n  const [ymd, hms] = fmt.format(now).split(', ');\n  const [y, m, d] = ymd.split('-').map(Number);\n  const [hh, mm, ss] = hms.split(':').map(Number);\n  return { y, m, d, hh, mm, ss };\n}\n\n// Parse “10”, “10am”, “10:30”, “3:15 pm”\nfunction parseTimeFromText(text) {\n  if (!text) return null;\n  const r = /\\b(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?\\b/i;\n  const m = text.match(r);\n  if (!m) return null;\n  let hh = parseInt(m[1], 10);\n  const mm = m[2] ? parseInt(m[2], 10) : 0;\n  const ap = m[3]?.toLowerCase();\n  if (ap === 'am') { if (hh === 12) hh = 0; }\n  else if (ap === 'pm') { if (hh < 12) hh += 12; }\n  return { hh, mm };\n}\n\n/* ----------------------------------------------------------------\n   TEST OVERRIDE (safe): If this is our curl test for a busy slot,\n   force \"tomorrow 10:00–10:30\" in Chicago into $json so that the\n   rest of the code picks it up correctly.\n----------------------------------------------------------------- */\nif ($json?.source === 'test:busy-slot') {\n  const nowChi = new Date(new Date().toLocaleString('en-US', { timeZone: TZ }));\n  const y = nowChi.getFullYear(), m = nowChi.getMonth(), d = nowChi.getDate() + 1;\n\n  const wallStart = new Date(y, m, d, 10, 0, 0, 0);\n  const wallEnd   = new Date(y, m, d, 10, 30, 0, 0);\n\n  $json.startIso = wallInTzToUtcISO(wallStart, TZ);   // e.g. 2025-11-01T15:00:00Z\n  $json.endIso   = wallInTzToUtcISO(wallEnd,   TZ);   // e.g. 2025-11-01T15:30:00Z\n  $json.tz = TZ;\n}\n\n// Read the (possibly overridden) inputs\nconst rawStart = $json.startIso;\nconst rawEnd   = $json.endIso;\n\nlet startIso, endIso;\n\n// 1) If incoming already has Z/offset, trust it.\nif (isIsoZoned(rawStart)) {\n  startIso = new Date(rawStart.trim()).toISOString();\n  endIso   = isIsoZoned(rawEnd)\n    ? new Date(rawEnd.trim()).toISOString()\n    : new Date(new Date(startIso).getTime() + 30*60*1000).toISOString();\n\n} else {\n  // 2) Build from text like “tomorrow at 10am …”\n  const text =\n    ($json?.body?.message?.text) ||\n    ($json?.body?.message?.artifact?.transcript ?? '') ||\n    (($json?.body?.message?.artifact?.messages ?? [])\n      .filter(m => m?.role === 'user' && typeof m.message === 'string')\n      .map(m => m.message).join(' '));\n\n  const wantTomorrow = /\\btomorrow\\b/i.test(text);\n  const t = parseTimeFromText(text);\n\n  // Base date = now in Chicago, rounded to next top-of-hour\n  const nowTz = nowPartsInTz(TZ);\n  let y = nowTz.y, m = nowTz.m, d = nowTz.d, hh = nowTz.hh, mm = 0;\n\n  if (wantTomorrow) {\n    const wall = new Date(y, m - 1, d, 0, 0, 0);\n    wall.setDate(wall.getDate() + 1);\n    y = wall.getFullYear(); m = wall.getMonth() + 1; d = wall.getDate();\n  }\n\n  if (t) { hh = t.hh; mm = t.mm; }\n  else { hh = (hh + 1) % 24; mm = 0; }\n\n  const wallStart = new Date(y, m - 1, d, hh, mm, 0, 0);\n  startIso = wallInTzToUtcISO(wallStart, TZ);\n\n  if (isIsoZoned(rawEnd)) {\n    endIso = new Date(rawEnd.trim()).toISOString();\n  } else {\n    const wallEnd = new Date(wallStart.getTime() + 30*60*1000);\n    endIso = wallInTzToUtcISO(wallEnd, TZ);\n  }\n}\n\n// Output in your node’s current shape\nreturn {\n  json: {\n    ...$json,\n    startIso,\n    endIso,\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2064,
+        144
+      ],
+      "id": "2e3ab313-44b2-4022-888f-a909c4356b2b",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi/call",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -3072,
+        304
+      ],
+      "id": "6b8437e0-39f9-49a2-acb1-9c09b74ec82a",
+      "name": "Webhook",
+      "webhookId": "72212877-5c69-499c-a97d-cf609765e8de"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Merge AI + Webhook identity, keep your date normalization ---\n\n// AI extractor output (schema mode returns { output: {...} })\nconst ai = $json.output ?? $json;\n\n// Webhook payload (authoritative identity)\nconst body = $item(0).$node[\"Webhook\"].json.body ?? {};\n\n// Prefer WEBHOOK for identity; AI for time-related fields & notes\nconst name     = body.name  ?? ai.name  ?? ai.fullName ?? null;\nconst phone    = body.phone ?? ai.phone ?? null;\nconst email    = body.email ?? ai.email ?? null;\n\nlet startIso   = ai.startIso ?? null;\nlet endIso     = ai.endIso   ?? null;\nconst confirm  = ai.confirm  ?? (body.confirm ?? null);\nconst notes    = ai.notes    ?? body.notes ?? null;\n\n// Carry timezone (default Chicago for this project)\nconst tz = body.tz ?? \"America/Chicago\";\n\n// --- Your date normalization stays the same ---\nfunction toDate(s) {\n  try { return s ? new Date(s) : null; } catch { return null; }\n}\n\nconst now = new Date();\nlet start = toDate(startIso);\nlet end   = toDate(endIso);\n\n// If start exists and is in the past, push 1 week forward\nif (start && start.getTime() <= now.getTime()) {\n  const next = new Date(start);\n  next.setDate(next.getDate() + 7);\n\n  const nextEnd = end ? new Date(end) : new Date(next.getTime() + 30*60*1000);\n  if (!end) end = nextEnd;\n  else nextEnd.setDate(nextEnd.getDate() + 7);\n\n  startIso = next.toISOString();\n  endIso   = nextEnd.toISOString();\n}\n\nreturn [{\n  json: {\n    // keep everything AI produced for forward-compat\n    ...ai,\n    name, phone, email,\n    startIso, endIso, confirm, notes, tz,\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2480,
+        304
+      ],
+      "id": "313c5cfe-238b-473f-8ca3-1fce754aff9e",
+      "name": "Function"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "KhDrCjGH7a3eTdKe",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/KhDrCjGH7a3eTdKe",
+          "cachedResultName": "Appointment Scheduling AI_v.0.0.3 (If_Confrim_yes)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -592,
+        -16
+      ],
+      "id": "7851f9cf-93e8-4612-b1a5-1ed9c310f2e1",
+      "name": "Call 'Appointment Scheduling AI_v.0.0.3 (If_Confrim_yes)'"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "kgC45JudCnRGR6gV",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/kgC45JudCnRGR6gV",
+          "cachedResultName": "Appointment Scheduling AI_v.0.0.3(If_Confirm_No)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -512,
+        320
+      ],
+      "id": "f648dac3-24ff-4502-b80b-de85fe06acec",
+      "name": "Call 'Appointment Scheduling AI_v.0.0.3(If_Confirm_No)'"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull a \"confirm\" value from the current item or fall back to upstream nodes.\n// This handles cases where an intermediate node replaced the JSON (e.g., event-shaped data).\n\nfunction pick(...vals) {\n  for (const v of vals) if (v !== undefined && v !== null && String(v).trim() !== '') return v;\n  return '';\n}\n\nconst confirmRaw = pick(\n  $json.confirm,\n  $json.output?.confirm,\n  $item(0).$node?.[\"Function\"]?.json?.confirm,                           // normalization node\n  $item(0).$node?.[\"Code\"]?.json?.confirm,                                // code before GCal\n  $item(0).$node?.[\"AI — Extract Booking Fields\"]?.json?.output?.confirm  // AI result\n);\n\nconst normalized = confirmRaw.toString().trim().toLowerCase();\n\n// Optional: normalize common variants\nconst yesWords = ['yes','y','confirm','confirmed','ok','okay','sure'];\nconst noWords  = ['no','n','cancel','nope','later','reschedule','not now'];\n\nlet confirm = '';\nif (yesWords.includes(normalized)) confirm = 'yes';\nelse if (noWords.includes(normalized)) confirm = 'no';\nelse confirm = normalized || 'no'; // safe default\n\nreturn [{\n  json: {\n    ...$json,\n    confirm\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1072,
+        0
+      ],
+      "id": "d9b8581a-ee38-4fd5-a408-55d90d6fd58b",
+      "name": "Ensure Confirm"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -2848,
+        480
+      ],
+      "id": "1c3d15a4-0942-4e90-9281-7cdde26fc0a2",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "4wHmecuhi3mYyPFp",
+          "name": "My personal account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You extract appointment info and return STRICT JSON.\n\nInterpretation rules:\n- Timezone is America/Chicago for all interpretation and output.\n- Current datetime (America/Chicago): {{ $now.setZone('America/Chicago').toISO() }}\n- If user gives a RELATIVE expression (e.g., “today 4pm”, “tomorrow 10am”, “next Fri 3:30”):\n  - Resolve to the next real calendar datetime in America/Chicago.\n  - If the resolved time has already passed today, move it forward appropriately\n    (e.g., tomorrow for “today”, or the next occurrence for “next Fri”).\n- If user gives an EXPLICIT, ZONED datetime (has Z or ±HH:MM), keep it as-is.\n  (Do NOT move explicit, zoned past dates.)\n- If only a start time is provided, set endIso = startIso + 30 minutes.\n- Names/phone/email may be null if not present.\n- Output only JSON. No extra text.\n\nOutput schema:\n{\n  \"name\": string|null,\n  \"phone\": string|null,\n  \"email\": string|null,\n  \"startIso\": ISO 8601 string WITH Chicago offset or null,   // e.g., 2025-11-01T10:00:00-05:00\n  \"endIso\":   ISO 8601 string WITH Chicago offset or null,\n  \"confirm\": \"yes\"|\"no\"|null,\n  \"notes\": string|null\n}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "={{\n(() => {\n  const b = $json.body || {};\n  const last = (arr) => Array.isArray(arr) && arr.length ? arr[arr.length-1] : undefined;\n\n  // 1) Last user message (artifact.messages)\n  const m1 = last((b.artifact?.messages || []).filter(m => m?.role === 'user'))?.message;\n  if (typeof m1 === 'string' && m1.trim()) return m1;\n\n  // 2) Last user message (messagesOpenAIFormatted)\n  const m2 = last((b.artifact?.messagesOpenAIFormatted || []).filter(m => m?.role === 'user'))?.content;\n  if (typeof m2 === 'string' && m2.trim()) return m2;\n\n  // 3) Tool call arguments (message.toolCalls / toolCallList)\n  const tc = (b.message?.toolCalls || b.message?.toolCallList || []);\n  const a3 = tc[0]?.function?.arguments;\n  if (a3) return typeof a3 === 'string' ? a3 : JSON.stringify(a3);\n\n  // 4) ToolWithToolCallList -> toolCall -> function.arguments\n  const tw = (b.message?.toolWithToolCallList || []);\n  const a4 = tw[0]?.toolCall?.function?.arguments;\n  if (a4) return typeof a4 === 'string' ? a4 : JSON.stringify(a4);\n\n  // 5) Raw strings\n  const mm = b.message?.message;\n  if (typeof mm === 'string' && mm) return mm;\n\n  if (typeof b.text === 'string') return b.text;\n\n  return '';\n})()\n}}"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        -2848,
+        304
+      ],
+      "id": "8c707c86-a9da-4492-851c-b615dd27a547",
+      "name": "AI — Extract Booking Fields"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8b265f42-bfaa-4011-aec5-110eb71737c2",
+              "leftValue": "={{ $json.startIso }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2272,
+        304
+      ],
+      "id": "430e7388-f566-42fc-80a4-1eda079e6f1e",
+      "name": "IF node “Slot Exists?”"
+    },
+    {
+      "parameters": {
+        "jsCode": "const name         = $json.name  ?? null;\nconst email        = $json.email ?? null;\nconst phone        = $json.phone ?? null;\nconst service_type = $json.service_type ?? null;\n\n// Default to America/Chicago for this project\nconst tz = $json.tz ?? \"America/Chicago\";\n\nreturn [{\n  json: {\n    result: \"need_more_info\",\n    missing: [\"appointment_request\"],   // i.e., the time\n    prompt: `I didn’t catch your preferred time. Please share a day and time (e.g., Tue 3:30 PM). I’ll check availability in ${tz}.`,\n    carry: {\n      name, email, phone, service_type,\n      timezone: tz\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -928,
+        320
+      ],
+      "id": "fcfaa7e2-8a6c-4557-a0c4-64e95fa8fc97",
+      "name": "Mark NeedTime"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "={\n  \"type\": \"object\",\n  \"properties\": {\n    \"name\":    { \"type\": [\"string\", \"null\"] },\n    \"phone\":   { \"type\": [\"string\", \"null\"] },\n    \"email\":   { \"type\": [\"string\", \"null\"] },\n    \"startIso\":{ \"type\": [\"string\", \"null\"] },\n    \"endIso\":  { \"type\": [\"string\", \"null\"] },\n    \"confirm\": { \"enum\": [\"yes\", \"no\", null] },\n    \"notes\":   { \"type\": [\"string\", \"null\"] }\n  },\n  \"required\": [\"name\",\"phone\",\"email\",\"startIso\",\"endIso\",\"confirm\",\"notes\"],\n  \"additionalProperties\": false\n}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        -2784,
+        608
+      ],
+      "id": "4b93cc26-0559-4b24-8268-115b541f30aa",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$item(0).$json}}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -48,
+        144
+      ],
+      "id": "866e4ea0-c57d-4e6c-b11d-66d0ddfadfcf",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1664,
+        144
+      ],
+      "id": "da34d8f4-1ff0-4939-8753-5870cc75a243",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -2768,
+        752
+      ],
+      "id": "2b8b5cb4-7c05-4903-afc1-2f83d058fbcd",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "4wHmecuhi3mYyPFp",
+          "name": "My personal account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Get the toolCallId that Vapi sent\nconst callId =\n  $item(0).$node[\"Webhook\"]?.json?.body?.message?.toolCalls?.[0]?.id ||\n  $item(0).$node[\"Webhook\"]?.json?.body?.message?.toolCallList?.[0]?.id ||\n  $json?.toolCallId || \"\";\n\n// 2) Get the booking payload you already produced upstream\n//    (fallback to current item if needed)\nconst payload =\n  $json?.result ? $json :\n  ($item(0).$node[\"Call 'Appointment Scheduling AI_v.0.0.3 (If_Confirm_yes)'\"]?.json || $json);\n\n// 3) Wrap exactly as Vapi expects: results[{ toolCallId, result: \"<string>\" }]\nreturn [{\n  json: {\n    results: [{\n      toolCallId: callId,\n      result: JSON.stringify(payload)   // <- STRING\n      // For failures, use: error: JSON.stringify(payload)\n    }]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -16
+      ],
+      "id": "d7de2b79-0d36-4634-ab7d-8e9b334785f9",
+      "name": "Vapi Wrapper"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Extract the Vapi toolCallId from the inbound webhook ---\nconst callId =\n  $item(0).$node[\"Webhook\"]?.json?.body?.message?.toolCalls?.[0]?.id ||\n  $item(0).$node[\"Webhook\"]?.json?.body?.message?.toolCallList?.[0]?.id ||\n  $json?.toolCallId || \"\";\n\n// --- Pick your upstream payload (the node that produced final result) ---\n// Prefer the most recent node that created { result: \"...\", ... }.\n// If your node names differ, update the reference below.\nconst upstream =\n  $json?.result ? $json :\n  $item(0).$prevNode?.json || $json;\n\n// --- Choose success vs error key dynamically ---\nconst isError = !!upstream?.error || upstream?.result === \"error\";\n\nreturn [{\n  json: {\n    results: [{\n      toolCallId: callId,\n      [isError ? \"error\" : \"result\"]: JSON.stringify(upstream)\n    }]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        320
+      ],
+      "id": "40e15df6-422d-4724-9121-32de4e241dbb",
+      "name": "Vapi Wrapper1"
+    }
+  ],
+  "pinData": {
+    "Webhook": [
+      {
+        "json": {
+          "headers": {
+            "host": "polarmedia.app.n8n.cloud",
+            "user-agent": "axios/1.8.3",
+            "content-length": "21933",
+            "accept": "application/json, text/plain, */*",
+            "accept-encoding": "gzip, br",
+            "baggage": "sentry-environment=production,sentry-public_key=fac6f282c765ce50b18c3fa0305f8a8b,sentry-trace_id=f787ea469f384a7fa859cd2232975dad",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "167.150.225.48",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "US",
+            "cf-ray": "99d4045097816c17-PDX",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "cookie": "callId=",
+            "sentry-trace": "f787ea469f384a7fa859cd2232975dad-82673697f63215c6",
+            "traceparent": "00-88b085376bdc48fc1317d0ff916703fe-e045dbb899f14812-01",
+            "x-chat-id": "eb34e321-ddb4-4cfa-b462-da825755a71f",
+            "x-forwarded-for": "167.150.225.48, 104.23.160.198",
+            "x-forwarded-host": "polarmedia.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-18-7959cfc789-zp8xj",
+            "x-is-trusted": "yes",
+            "x-real-ip": "167.150.225.48",
+            "x-vapi-secret": ""
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "message": {
+              "timestamp": 1762929405350,
+              "type": "tool-calls",
+              "toolCalls": [
+                {
+                  "id": "call_VdBh8ZK1N270kWIuLphSRUsr",
+                  "type": "function",
+                  "function": {
+                    "name": "function_tool",
+                    "arguments": {
+                      "name": "jay",
+                      "email": "j@gmail.com",
+                      "phone": "1234567890",
+                      "title": "Consultation Appointment",
+                      "service_type": "consultation",
+                      "startIso": "2025-11-12T05:50:00Z",
+                      "endIso": "2025-11-12T06:20:00Z",
+                      "timezone": "America/Chicago",
+                      "confirm": "yes"
+                    }
+                  }
+                }
+              ],
+              "toolCallList": [
+                {
+                  "id": "call_VdBh8ZK1N270kWIuLphSRUsr",
+                  "type": "function",
+                  "function": {
+                    "name": "function_tool",
+                    "arguments": {
+                      "name": "jay",
+                      "email": "j@gmail.com",
+                      "phone": "1234567890",
+                      "title": "Consultation Appointment",
+                      "service_type": "consultation",
+                      "startIso": "2025-11-12T05:50:00Z",
+                      "endIso": "2025-11-12T06:20:00Z",
+                      "timezone": "America/Chicago",
+                      "confirm": "yes"
+                    }
+                  }
+                }
+              ],
+              "toolWithToolCallList": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "function_tool",
+                    "strict": true,
+                    "parameters": {
+                      "type": "object",
+                      "required": [
+                        "title",
+                        "startIso",
+                        "endIso",
+                        "timezone",
+                        "name",
+                        "phone",
+                        "service_type",
+                        "email",
+                        "confirm"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "Caller full name"
+                        },
+                        "email": {
+                          "type": "string",
+                          "default": "",
+                          "description": ""
+                        },
+                        "notes": {
+                          "type": "string",
+                          "default": "",
+                          "description": "Extra context"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "Caller phone in E.164 (e.g., +12145550123)"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "Title of the appointment"
+                        },
+                        "endIso": {
+                          "type": "string",
+                          "default": "",
+                          "description": "End datetime in ISO 8601 (e.g., 2025-10-05T11:00:00-05:00)"
+                        },
+                        "confirm": {
+                          "enum": [
+                            "yes",
+                            "no"
+                          ],
+                          "type": "string",
+                          "default": "",
+                          "description": "User confirmation for the chosen slot; send \\\"yes\\\" when user explicitly confirms."
+                        },
+                        "startIso": {
+                          "type": "string",
+                          "default": "",
+                          "description": "Start datetime in ISO 8601 (e.g., 2025-10-05T10:30:00-05:00)"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "default": "America/Chicago",
+                          "description": "IANA timezone"
+                        },
+                        "attendees": {
+                          "type": "string",
+                          "description": "Comma-separated attendee emails (optional)"
+                        },
+                        "altConfirm": {
+                          "enum": [
+                            "yes",
+                            "no"
+                          ],
+                          "type": "string",
+                          "description": "Confirm alternative slot?"
+                        },
+                        "service_type": {
+                          "enum": [
+                            "general support",
+                            "maintenance",
+                            "consultation",
+                            "onsite",
+                            "emergency"
+                          ],
+                          "type": "string",
+                          "description": "Requested service category"
+                        }
+                      }
+                    },
+                    "description": "Send JSON with title, start, end, timezone, attendees, and notes.\nThe tool will respond with whether the appointment was booked, if more info is needed, or if no slot is available. When you call bookAppointment, Webhook returns JSON:\n\n{\"result\":\"booked|need_more_info|no_free_slot|error\",\n\"slot\":{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"},\n\"title\":\"<str>\",\"bookingId\":\"<id>\",\"calendarUrl\":\"<url>\",\n\"notes\":\"<str>\",\n\"alternatives\":[{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"}],\n\"reason\":\"<str>\"}\n\nHandle:\n- booked → confirm title/date/time; end.\n- need_more_info → ask only for fields named in reason.\n- no_free_slot → read 1–2 items from alternatives, ask user to pick, then call tool again with chosen slot.\n- error → apologize and suggest trying later."
+                  },
+                  "server": {
+                    "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/call",
+                    "headers": {
+                      "X-Chat-Id": "eb34e321-ddb4-4cfa-b462-da825755a71f"
+                    }
+                  },
+                  "messages": [
+                    {
+                      "type": "request-start",
+                      "contents": [],
+                      "conditions": [],
+                      "blocking": false
+                    }
+                  ],
+                  "toolCall": {
+                    "id": "call_VdBh8ZK1N270kWIuLphSRUsr",
+                    "type": "function",
+                    "function": {
+                      "name": "function_tool",
+                      "arguments": {
+                        "name": "jay",
+                        "email": "j@gmail.com",
+                        "phone": "1234567890",
+                        "title": "Consultation Appointment",
+                        "service_type": "consultation",
+                        "startIso": "2025-11-12T05:50:00Z",
+                        "endIso": "2025-11-12T06:20:00Z",
+                        "timezone": "America/Chicago",
+                        "confirm": "yes"
+                      }
+                    }
+                  }
+                }
+              ],
+              "artifact": {
+                "messages": [
+                  {
+                    "role": "system",
+                    "message": "[Identity]\n-You are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → book new appointments\nRequires: name, email, phone, title, service_type, startIso, endIso, timezone.\nWhen the caller explicitly picks a slot, also send: confirm: \"yes\".\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n“Thanks for reaching QuantumOps IT Solutions. I’m Alex, your scheduling assistant. How...",
+                    "time": 1762929403681,
+                    "secondsFromStart": 0
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?",
+                    "time": 1762929403681,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "user",
+                    "message": "book an appointment",
+                    "time": 1762929403682,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Sure! What type of service do you need the appointment for? We offer general support, maintenance, consultation, onsite, and emergency services.",
+                    "time": 1762929403683,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "user",
+                    "message": "general consultation and I want to book on 2025-11-12T05:50",
+                    "time": 1762929403684,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Thanks for providing the date and time. Could you confirm the duration you'd like for this consultation? Typically, consultations are scheduled for 30 minutes or 1 hour.",
+                    "time": 1762929403685,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "user",
+                    "message": "yes",
+                    "time": 1762929403686,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Great! I'll set up a 30-minute consultation for you on November 12, 2025, starting at 5:50 AM. Could you please provide your full name, email address, and phone number to complete the booking?",
+                    "time": 1762929403687,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "role": "user",
+                    "message": "name jay and mail is j@gmail.com and mobile is 1234567890",
+                    "time": 1762929403688,
+                    "secondsFromStart": 0,
+                    "endTime": 1762929403681
+                  },
+                  {
+                    "toolCalls": [
+                      {
+                        "id": "call_VdBh8ZK1N270kWIuLphSRUsr",
+                        "type": "function",
+                        "function": {
+                          "name": "function_tool",
+                          "arguments": "{\n  \"name\": \"jay\",\n  \"email\": \"j@gmail.com\",\n  \"phone\": \"1234567890\",\n  \"title\": \"Consultation Appointment\",\n  \"service_type\": \"consultation\",\n  \"startIso\": \"2025-11-12T05:50:00Z\",\n  \"endIso\": \"2025-11-12T06:20:00Z\",\n  \"timezone\": \"America/Chicago\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ],
+                    "role": "tool_calls",
+                    "message": "",
+                    "time": 1762929405331,
+                    "secondsFromStart": 1.65
+                  }
+                ],
+                "messagesOpenAIFormatted": [
+                  {
+                    "role": "system",
+                    "content": "[Identity]\n-You are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → book new appointments\nRequires: name, email, phone, title, service_type, startIso, endIso, timezone.\nWhen the caller explicitly picks a slot, also send: confirm: \"yes\".\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n“Thanks for reaching QuantumOps IT Solutions. I’m Alex, your scheduling assistant. How..."
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "book an appointment"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Sure! What type of service do you need the appointment for? We offer general support, maintenance, consultation, onsite, and emergency services."
+                  },
+                  {
+                    "role": "user",
+                    "content": "general consultation and I want to book on 2025-11-12T05:50"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Thanks for providing the date and time. Could you confirm the duration you'd like for this consultation? Typically, consultations are scheduled for 30 minutes or 1 hour."
+                  },
+                  {
+                    "role": "user",
+                    "content": "yes"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Great! I'll set up a 30-minute consultation for you on November 12, 2025, starting at 5:50 AM. Could you please provide your full name, email address, and phone number to complete the booking?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "name jay and mail is j@gmail.com and mobile is 1234567890"
+                  },
+                  {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_VdBh8ZK1N270kWIuLphSRUsr",
+                        "type": "function",
+                        "function": {
+                          "name": "function_tool",
+                          "arguments": "{\n  \"name\": \"jay\",\n  \"email\": \"j@gmail.com\",\n  \"phone\": \"1234567890\",\n  \"title\": \"Consultation Appointment\",\n  \"service_type\": \"consultation\",\n  \"startIso\": \"2025-11-12T05:50:00Z\",\n  \"endIso\": \"2025-11-12T06:20:00Z\",\n  \"timezone\": \"America/Chicago\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_VdBh8ZK1N270kWIuLphSRUsr",
+                    "content": "Tool Result Still Pending But Proceed Further If Possible."
+                  }
+                ]
+              },
+              "chat": {
+                "id": "eb34e321-ddb4-4cfa-b462-da825755a71f",
+                "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                "createdAt": "2025-09-19T04:19:36.443Z",
+                "updatedAt": "2025-11-12T05:33:32.943Z"
+              },
+              "assistant": {
+                "id": "cda9d127-ac08-45d3-93d7-3d18ad9570fc",
+                "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                "name": "appointment_assistance",
+                "voice": {
+                  "voiceId": "Elliot",
+                  "provider": "vapi"
+                },
+                "createdAt": "2025-09-19T07:58:36.229Z",
+                "updatedAt": "2025-11-08T05:35:14.163Z",
+                "model": {
+                  "model": "gpt-4o",
+                  "toolIds": [
+                    "e3e93618-65cc-430e-96a1-99e96c97a6ab",
+                    "1de0d2dd-c744-4607-8bff-bdef102267f5",
+                    "90091906-a3a3-43e9-86b4-1ec9d70aeb4e",
+                    "da8f8d98-221e-4a14-94e4-2435224a5eb4",
+                    "0110b0d0-50db-4594-b468-8646899301bc"
+                  ],
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": "[Identity]\n-You are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → book new appointments\nRequires: name, email, phone, title, service_type, startIso, endIso, timezone.\nWhen the caller explicitly picks a slot, also send: confirm: \"yes\".\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n“Thanks for reaching QuantumOps IT Solutions. I’m Alex, your scheduling assistant. How can I help you today?”\n\n[Dialog Flow]\n-New booking\nGather: service type (support/maintenance/consultation/onsite/emergency), date, time, name, email, phone.\nIf date or time is missing, ask for the missing piece.\n\nAfter the caller confirms the slot, call function_tool with all fields and confirm: \"yes\".\n\n-Lookup → Confirm → Cancel / Reschedule\nAfter lookup_tool:\nfound: “I found an appointment on {{DATE}} at {{TIME}} ({{TIMEZONE}}). Do you want to cancel or reschedule it?”\n\nnot_found: “I couldn’t find a booking with that info. Would you like to try a different phone or an email?”\n\nneed_phone: “What phone number did you use to book?”\n\n-Cancel: on “yes”, call cancel_tool with { bookingId, confirm: \"yes\" }.\n\n-Reschedule: ask for new date/time, convert to ISO, call reschedule_tool.\n\n[Alternatives & Missing Info]\n\nIf no_free_slot, read 1–2 options from alternatives, ask the caller to pick, then call the relevant tool again with the chosen times.\n\nIf need_more_info, ask only for the fields listed.\n\n[Timezone & Time Conversion Rules]\nDefault timezone: America/Chicago (unless the caller specifies another IANA timezone).\n\nIf the caller gives a date without a year, choose the next future occurrence of that month/day.\n\nConvert requested local time to UTC ISO with Z (e.g., 2025-11-10T16:00:00Z) and also set timezone: \"America/Chicago\".\n\nObserve DST correctly (after the first Sunday in November, America/Chicago is UTC−06:00).\n\n[State to Track]\nPersist across turns:\nphone       → caller’s number (E.164 if possible)\nbookingId   → from lookup/cancel/reschedule\nstage       → \"new\" | \"confirm\" | \"reschedule\" | \"cancel\"\ncarry       → { title, startIso, endIso, timezone }\n\n[Cancellation Policy]\nPhone-first: If user requests cancel and bookingId isn’t known, use lookup_tool with phone (or email). Confirm using a human summary (date/time/timezone). Do not read or ask for long booking IDs.\n\n[Operating Context]\nRegular hours: Mon–Fri, 9 AM–6 PM America/Chicago (emergencies may be outside these hours).\nNew clients: 30-minute onboarding.\nCancellations must be ≥ 24 hours in advance.\n\n[Silence/Disconnect]\nIf the call disconnects or silence >10 s: call recover_tool with what you know, then end the call politely."
+                    }
+                  ],
+                  "provider": "openai",
+                  "temperature": 0.5,
+                  "tools": [
+                    {
+                      "id": "e3e93618-65cc-430e-96a1-99e96c97a6ab",
+                      "createdAt": "2025-11-04T09:32:33.595Z",
+                      "updatedAt": "2025-11-08T04:49:04.613Z",
+                      "type": "function",
+                      "function": {
+                        "name": "reschedule_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "newStartIso",
+                            "newEndIso",
+                            "bookingId",
+                            "timezone"
+                          ],
+                          "properties": {
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used to identify the existing appointment (fallback if no bookingId)"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "",
+                              "description": "IANA timezone, e.g., America/Chicago\n"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Exact Google Calendar event id, if known (preferred)"
+                            },
+                            "newEndIso": {
+                              "type": "string",
+                              "description": "New appointment end time in ISO format"
+                            },
+                            "newStartIso": {
+                              "type": "string",
+                              "description": "New appointment start time in ISO format"
+                            }
+                          }
+                        }
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/reschedule",
+                        "headers": {
+                          "X-Chat-Id": "eb34e321-ddb4-4cfa-b462-da825755a71f"
+                        }
+                      }
+                    },
+                    {
+                      "id": "1de0d2dd-c744-4607-8bff-bdef102267f5",
+                      "createdAt": "2025-11-04T09:35:30.518Z",
+                      "updatedAt": "2025-11-05T09:56:51.667Z",
+                      "type": "function",
+                      "function": {
+                        "name": "cancel_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "confirm",
+                            "bookingId"
+                          ],
+                          "properties": {
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used when booking"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "description": "Optional reason provided by caller"
+                            },
+                            "confirm": {
+                              "enum": [
+                                "yes"
+                              ],
+                              "type": "string",
+                              "description": "Must be 'yes' to proceed with cancellation"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Event ID to cancel (preferred if available)"
+                            }
+                          }
+                        },
+                        "description": "Use this tool to cancel an appointment only when bookingId is already provided or known.\nIf the user says “cancel booking ID …”, do not ask for phone/email.\nFirst ask: “Please confirm you want to cancel booking ID ____ by replying yes.”\nOnly when the user replies “yes”, call this tool with { bookingId, confirm: \"yes\" }.\nIf no bookingId is provided, ask for phone/email first and call lookup_tool.\nNever ask for phone/email after a bookingId is given."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/cancel",
+                        "headers": {
+                          "X-Chat-Id": "eb34e321-ddb4-4cfa-b462-da825755a71f",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "90091906-a3a3-43e9-86b4-1ec9d70aeb4e",
+                      "createdAt": "2025-11-04T09:41:02.185Z",
+                      "updatedAt": "2025-11-05T10:52:33.488Z",
+                      "type": "function",
+                      "function": {
+                        "name": "lookup_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [],
+                          "properties": {
+                            "email": {
+                              "type": "string",
+                              "description": "Email used when booking"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used when booking"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "description": "Exact Google Calendar event id if known"
+                            },
+                            "rangeEndIso": {
+                              "type": "string",
+                              "description": "Optional search window end (ISO)"
+                            },
+                            "rangeStartIso": {
+                              "type": "string",
+                              "description": "Optional search window start (ISO)"
+                            }
+                          }
+                        },
+                        "description": "Provide either phone or email. If neither is known, ask the user for one."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi-lookup",
+                        "headers": {
+                          "X-Chat-Id": "eb34e321-ddb4-4cfa-b462-da825755a71f",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "da8f8d98-221e-4a14-94e4-2435224a5eb4",
+                      "createdAt": "2025-11-05T12:50:43.995Z",
+                      "updatedAt": "2025-11-05T12:50:43.995Z",
+                      "type": "function",
+                      "function": {
+                        "name": "recover_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "stage"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "carry": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "endIso": {
+                                  "type": "string"
+                                },
+                                "startIso": {
+                                  "type": "string"
+                                },
+                                "timezone": {
+                                  "type": "string"
+                                }
+                              },
+                              "description": "Partial booking info if we had it (title, startIso, endIso, timezone)."
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Caller phone (E.164 if possible)"
+                            },
+                            "stage": {
+                              "enum": [
+                                "new",
+                                "confirm",
+                                "reschedule",
+                                "cancel"
+                              ],
+                              "type": "string",
+                              "description": "Where the flow dropped."
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "description": "Known Google Calendar event id, if any"
+                            }
+                          }
+                        },
+                        "description": "Call this if the call disconnects mid-flow. Pass what you know so the system can send the correct follow-up."
+                      },
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/recover",
+                        "headers": {
+                          "X-Chat-Id": "eb34e321-ddb4-4cfa-b462-da825755a71f",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "0110b0d0-50db-4594-b468-8646899301bc",
+                      "createdAt": "2025-10-04T05:42:12.841Z",
+                      "updatedAt": "2025-11-08T05:26:45.384Z",
+                      "type": "function",
+                      "function": {
+                        "name": "function_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "title",
+                            "startIso",
+                            "endIso",
+                            "timezone",
+                            "name",
+                            "phone",
+                            "service_type",
+                            "email",
+                            "confirm"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "Caller full name"
+                            },
+                            "email": {
+                              "type": "string",
+                              "default": "",
+                              "description": ""
+                            },
+                            "notes": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Extra context"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Caller phone in E.164 (e.g., +12145550123)"
+                            },
+                            "title": {
+                              "type": "string",
+                              "description": "Title of the appointment"
+                            },
+                            "endIso": {
+                              "type": "string",
+                              "default": "",
+                              "description": "End datetime in ISO 8601 (e.g., 2025-10-05T11:00:00-05:00)"
+                            },
+                            "confirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "default": "",
+                              "description": "User confirmation for the chosen slot; send \\\"yes\\\" when user explicitly confirms."
+                            },
+                            "startIso": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Start datetime in ISO 8601 (e.g., 2025-10-05T10:30:00-05:00)"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "America/Chicago",
+                              "description": "IANA timezone"
+                            },
+                            "attendees": {
+                              "type": "string",
+                              "description": "Comma-separated attendee emails (optional)"
+                            },
+                            "altConfirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "description": "Confirm alternative slot?"
+                            },
+                            "service_type": {
+                              "enum": [
+                                "general support",
+                                "maintenance",
+                                "consultation",
+                                "onsite",
+                                "emergency"
+                              ],
+                              "type": "string",
+                              "description": "Requested service category"
+                            }
+                          }
+                        },
+                        "description": "Send JSON with title, start, end, timezone, attendees, and notes.\nThe tool will respond with whether the appointment was booked, if more info is needed, or if no slot is available. When you call bookAppointment, Webhook returns JSON:\n\n{\"result\":\"booked|need_more_info|no_free_slot|error\",\n\"slot\":{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"},\n\"title\":\"<str>\",\"bookingId\":\"<id>\",\"calendarUrl\":\"<url>\",\n\"notes\":\"<str>\",\n\"alternatives\":[{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"}],\n\"reason\":\"<str>\"}\n\nHandle:\n- booked → confirm title/date/time; end.\n- need_more_info → ask only for fields named in reason.\n- no_free_slot → read 1–2 items from alternatives, ask user to pick, then call tool again with chosen slot.\n- error → apologize and suggest trying later."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/call",
+                        "headers": {
+                          "X-Chat-Id": "eb34e321-ddb4-4cfa-b462-da825755a71f"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "recordingEnabled": false,
+                "firstMessage": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?",
+                "voicemailMessage": "Hello, this is Riley from Wellness Partners. I'm calling about your appointment. Please call us back at your earliest convenience so we can confirm your scheduling details.",
+                "endCallMessage": "Perfect! Your appointment has been scheduled. You'll receive a confirmation email shortly. Have a great day!",
+                "transcriber": {
+                  "model": "nova-2",
+                  "language": "en",
+                  "numerals": false,
+                  "provider": "deepgram",
+                  "endpointing": 300,
+                  "confidenceThreshold": 0.4
+                },
+                "clientMessages": [
+                  "conversation-update",
+                  "function-call",
+                  "hang",
+                  "model-output",
+                  "speech-update",
+                  "status-update",
+                  "transfer-update",
+                  "transcript",
+                  "tool-calls",
+                  "user-interrupted",
+                  "voice-input",
+                  "workflow.node.started"
+                ],
+                "hipaaEnabled": false,
+                "analysisPlan": {
+                  "minMessagesThreshold": 2
+                },
+                "backgroundDenoisingEnabled": false,
+                "artifactPlan": {
+                  "structuredOutputIds": [
+                    "714f8cf2-ed60-4a8f-acb9-524afaafab35"
+                  ]
+                },
+                "startSpeakingPlan": {
+                  "waitSeconds": 0.4,
+                  "transcriptionEndpointingPlan": {
+                    "onNumberSeconds": 0.5,
+                    "onPunctuationSeconds": 0.1,
+                    "onNoPunctuationSeconds": 1.5
+                  }
+                }
+              }
+            }
+          },
+          "webhookUrl": "https://polarmedia.app.n8n.cloud/webhook/vapi/call",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "GCal (Check Availability)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code (Availability Flag)": {
+      "main": [
+        [
+          {
+            "node": "IF Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Available?": {
+      "main": [
+        [
+          {
+            "node": "Ensure Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call 'Appointment Scheduling AI_v.0.0.3(If_Confirm_No)'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cron (Day Before)": {
+      "main": [
+        [
+          {
+            "node": "GCal (Events Tomorrow)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cron (Same Day)": {
+      "main": [
+        [
+          {
+            "node": "GCal (Events Today)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal (Events Tomorrow)": {
+      "main": [
+        [
+          {
+            "node": "Code (Build SMS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal (Events Today)": {
+      "main": [
+        [
+          {
+            "node": "Code (Build SMS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Build SMS)": {
+      "main": [
+        [
+          {
+            "node": "Twilio (Send SMS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Confirm": {
+      "main": [
+        [
+          {
+            "node": "Call 'Appointment Scheduling AI_v.0.0.3 (If_Confrim_yes)'",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call 'Appointment Scheduling AI_v.0.0.3(If_Confirm_No)'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "GCal (Check Availability)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "AI — Extract Booking Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function": {
+      "main": [
+        [
+          {
+            "node": "IF node “Slot Exists?”",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Confirm": {
+      "main": [
+        [
+          {
+            "node": "If Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI — Extract Booking Fields",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI — Extract Booking Fields": {
+      "main": [
+        [
+          {
+            "node": "Function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF node “Slot Exists?”": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark NeedTime",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark NeedTime": {
+      "main": [
+        [
+          {
+            "node": "Call 'Appointment Scheduling AI_v.0.0.3(If_Confirm_No)'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI — Extract Booking Fields",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Appointment Scheduling AI_v.0.0.3 (If_Confrim_yes)'": {
+      "main": [
+        [
+          {
+            "node": "Vapi Wrapper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Appointment Scheduling AI_v.0.0.3(If_Confirm_No)'": {
+      "main": [
+        [
+          {
+            "node": "Vapi Wrapper1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code (Availability Flag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi Wrapper": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi Wrapper1": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "4a2e0033-88f9-4ec9-b6cc-30bcbc7d5384",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "EM9woVuKNfzaq8H1",
+  "tags": []
+}

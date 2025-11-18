@@ -1,0 +1,102 @@
+{
+  "name": "Appointment_scheduler_v0.0.3_RDC – Signed Link Resolver (JWT verify → 302 redirect)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "s/:action",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2adf9dc3-90b1-4e21-b606-8a4d95f540e3",
+      "name": "Webhook (signed)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -400
+      ],
+      "webhookId": "5dc6515e-7dbb-4e04-b183-12cafc65b30d"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify JWT + Route (reschedule UI, cancel UI redirect, resume/confirm)\n// One workflow; RDC only decides where the browser goes.\n\nconst crypto = require('crypto');\n\nconst SECRET = 'ad4b3a2ed7d1438023ad7e40bd2daab6bd222f02a4e5d377481e4bb1b06093af';\nconst BASE   = 'https://polarmedia.app.n8n.cloud';\n\n// --- helpers: b64url + JWT verify (HS256) ---\nconst b64url = (buf) => buf.toString('base64').replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');\nconst fromB64url = (s) => Buffer.from(String(s||'').replace(/-/g,'+').replace(/_/g,'/'), 'base64');\n\nfunction signHS256(header, payload, secret) {\n  const data = `${header}.${payload}`;\n  const sig = crypto.createHmac('sha256', secret).update(data).digest();\n  return b64url(sig);\n}\n\nfunction verifyJWT(token, secret) {\n  if (!token || token.split('.').length !== 3) throw new Error('Bad token');\n  const [h, p, s] = token.split('.');\n  const expSig = signHS256(h, p, secret);\n  if (s !== expSig) throw new Error('Bad signature');\n  const payload = JSON.parse(fromB64url(p).toString('utf8'));\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('Expired');\n  return payload;\n}\n\n// --- read inputs ---\nconst action = $json.params?.action || $json.query?.action || ''; // from /s/:action\nconst token  = $json.query?.t || '';\n\nlet payload;\ntry {\n  payload = verifyJWT(token, SECRET);\n} catch (e) {\n  return [{\n    json: {\n      status: 400,\n      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },\n      body: JSON.stringify({ ok:false, error: e.message })\n    }\n  }];\n}\n\nif (payload.action && String(payload.action).toLowerCase() !== String(action).toLowerCase()) {\n  return [{\n    json: {\n      status: 400,\n      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },\n      body: JSON.stringify({ ok:false, error: 'Action mismatch' })\n    }\n  }];\n}\n\nconst bookingIdFromToken = payload.bookingId || '';\nconst phone = payload.phone || '';\n\nlet status, headers, body;\n\n// ---------- RESCHEDULE: serve interactive HTML (unchanged) ----------\nif (payload.action === 'reschedule') {\n  const carry = payload.carry || {};\n  const defaultTz = carry.timezone || 'America/Chicago';\n\n  const html = `<!doctype html>\n<meta charset=\"utf-8\">\n<title>Reschedule your appointment</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<style>\n  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;max-width:520px;margin:32px auto}\n  .card{border:1px solid #eee;border-radius:16px;padding:20px;box-shadow:0 1px 8px rgba(0,0,0,.06)}\n  h1{font-size:20px;margin:0 0 12px}\n  label{display:block;margin:12px 0 4px}\n  input,select,button{font:inherit;padding:10px;width:100%;box-sizing:border-box}\n  button{margin-top:16px;border-radius:12px;border:0;background:#111;color:#fff;cursor:pointer}\n  .muted{color:#666;font-size:12px;margin-top:8px}\n  .msg{margin-top:14px;white-space:pre-wrap}\n  .ok{color:#0a7d22}.err{color:#b00020}\n</style>\n<div class=\"card\">\n  <h1>Reschedule your ${carry.title ? carry.title : 'appointment'}</h1>\n  <label>Date</label><input type=\"date\" id=\"date\">\n  <label>Start time</label><input type=\"time\" id=\"time\" step=\"900\">\n  <label>Duration</label>\n  <select id=\"dur\"><option value=\"30\">30 minutes</option><option value=\"45\">45 minutes</option><option value=\"60\">60 minutes</option></select>\n  <button id=\"go\">Reschedule</button>\n  <div class=\"muted\">Timezone: <span id=\"tz\">${defaultTz}</span></div>\n  <div class=\"msg\" id=\"msg\"></div>\n</div>\n<script>\n  const tz = ${JSON.stringify(defaultTz)};\n  const postRescheduleUrl = ${JSON.stringify(`${BASE}/webhook/vapi/reschedule`)};\n  const lookupUrl = ${JSON.stringify(`${BASE}/webhook/vapi-lookup`)};\n  const basePhone = ${JSON.stringify(phone || '')};\n  let bookingId = ${JSON.stringify(bookingIdFromToken)};\n\n  function to24h(t){\n    if(!t) return '';\n    const m = String(t).trim().match(/^(\\\\d{1,2}):(\\\\d{2})(?:\\\\s*(AM|PM))?$/i);\n    if(!m) return t;\n    let [_, hh, mm, ap] = m;\n    let h = parseInt(hh,10);\n    if (ap) {\n      if (/pm/i.test(ap) && h < 12) h += 12;\n      if (/am/i.test(ap) && h === 12) h = 0;\n    }\n    return String(h).padStart(2,'0') + ':' + mm;\n  }\n\n  function toIso(dateStr, timeStr, minutes){\n    const t24 = to24h(timeStr);\n    const d = new Date(\\`\\${dateStr}T\\${t24}:00\\`);\n    const startIso = d.toISOString();\n    const endIso = new Date(d.getTime() + minutes*60000).toISOString();\n    return { startIso, endIso };\n  }\n\n  async function lookupBookingIdByPhone(phoneE164){\n    const res = await fetch(lookupUrl, {\n      method: \"POST\",\n      headers: { \"Content-Type\":\"application/json\" },\n      body: JSON.stringify({ body: { phone: phoneE164 } })\n    });\n    const txt = await res.text();\n    try {\n      const j = JSON.parse(txt);\n      if (j && j.bookingId) return j.bookingId;\n      if (Array.isArray(j) && j[0]?.bookingId) return j[0].bookingId;\n      if (j?.result === 'found' && j?.debug?.bookingId) return j.debug.bookingId;\n      return '';\n    } catch { return ''; }\n  }\n\n  async function postReschedule(payload){\n    const res = await fetch(postRescheduleUrl, {\n      method: \"POST\",\n      headers: { \"Content-Type\":\"application/json\" },\n      body: JSON.stringify(payload)\n    });\n    return { status: res.status, text: await res.text() };\n  }\n\n  document.getElementById('go').onclick = async () => {\n    const date = document.getElementById('date').value;\n    const time = document.getElementById('time').value;\n    const dur  = parseInt(document.getElementById('dur').value, 10);\n    const msg  = document.getElementById('msg');\n\n    if (!date || !time) { msg.innerHTML = '<span class=\"err\">Please choose date & time.</span>'; return; }\n    msg.textContent = 'Preparing…';\n\n    if (!bookingId && basePhone) {\n      bookingId = await lookupBookingIdByPhone(basePhone);\n      if (!bookingId) { msg.innerHTML = '<span class=\"err\">Could not find your booking from phone.</span>'; return; }\n    }\n\n    const iso = toIso(String(date), String(time), dur);\n    const payload = { body: { bookingId, phone: basePhone || undefined, newStartIso: iso.startIso, newEndIso: iso.endIso, timezone: tz, phase: \"commit\" } };\n\n    try {\n      msg.textContent = 'Submitting…';\n      const { status, text } = await postReschedule(payload);\n      msg.innerHTML = (status>=200 && status<300 ? '<span class=\"ok\">Done!</span>\\\\n' : '<span class=\"err\">Error '+status+':</span>\\\\n') + text;\n    } catch (e) { msg.innerHTML = '<span class=\"err\">Network error:</span> ' + e.message; }\n  };\n</script>`;\n\n  status  = 200;\n  headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };\n  body    = html;\n\n// ---------- CANCEL: 302 redirect to the NEW UI (GET) ----------\n} else if (payload.action === 'cancel') {\n  const ui = `${BASE}/webhook/vapi/cancel-ui`;\n  const qs = new URLSearchParams();\n  if (bookingIdFromToken) qs.set('bookingId', bookingIdFromToken);\n  if (phone)             qs.set('phone',     phone);\n  const dest = qs.toString() ? `${ui}?${qs.toString()}` : ui;\n\n  status  = 302;\n  headers = { 'Location': dest, 'Cache-Control': 'no-store' };\n  body    = '';\n\n// ---------- SIMPLE REDIRECTS ----------\n} else if (payload.action === 'resume' || payload.action === 'confirm') {\n  const dest = `${BASE}/webhook/vapi/${payload.action}?bookingId=${encodeURIComponent(bookingIdFromToken || '')}`;\n  status  = 302;\n  headers = { 'Location': dest, 'Cache-Control': 'no-store' };\n  body    = '';\n\n// ---------- UNKNOWN ----------\n} else {\n  status  = 400;\n  headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\n  body    = JSON.stringify({ ok:false, error: 'Unknown action' });\n}\n\nreturn [{ json: { status, headers, body } }];"
+      },
+      "id": "57ba4f59-6b14-498f-a14a-dec8bdf00129",
+      "name": "Code (Verify JWT)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.body || '' }}",
+        "options": {
+          "responseCode": "={{ $json.status || 302 }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Location",
+                "value": "={{ $json.headers?.Location || '' }}"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "={{ $json.headers?.['Cache-Control'] || 'no-store' }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "={{ $json.headers?.['Content-Type'] || '' }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "6f6f35f3-e41d-40cd-a10b-c4d183eb3ed7",
+      "name": "Respond (302 redirect)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        688,
+        -400
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook (signed)": {
+      "main": [
+        [
+          {
+            "node": "Code (Verify JWT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Verify JWT)": {
+      "main": [
+        [
+          {
+            "node": "Respond (302 redirect)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "31911323-cf0e-4fdd-be60-1148a8929a84",
+  "meta": {
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "K83JrurzaRnUS4ea",
+  "tags": []
+}

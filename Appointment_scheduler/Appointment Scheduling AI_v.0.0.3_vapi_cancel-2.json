@@ -1,0 +1,1203 @@
+{
+  "name": "Appointment Scheduling AI_v.0.0.3_vapi_cancel",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi/cancel",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -928,
+        0
+      ],
+      "id": "d54e2e0b-78b1-4392-95fd-0313a50de9eb",
+      "name": "Webhook",
+      "webhookId": "9912b6ee-3f83-4839-837c-2b55b6a70dd8"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ========== Validate Cancel (robust unwrapping for Vapi) ==========\n\n// 1) Base layers\nconst root   = ($json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst direct = (root.body && typeof root.body === 'object') ? root.body : root;\n\n// 1a) Capture toolCallId from Vapi (for echoing back in wrapper)\nconst toolCallId =\n  (root?.message?.toolCalls?.[0]?.id) ||\n  (root?.message?.toolCallList?.[0]?.id) ||\n  \"\";\n\n// 2) Try to extract arguments from multiple places\nfunction extractArgs() {\n  // a) Direct flat payload (preferred)\n  if (direct.bookingId || direct.confirm || direct.phone) return direct;\n\n  // b) Vapi tool-calls (object OR JSON-string arguments)\n  const m = root.message || {};\n  const tc  = Array.isArray(m.toolCalls)     ? m.toolCalls     : [];\n  const tcl = Array.isArray(m.toolCallList)  ? m.toolCallList  : [];\n  const all = [...tc, ...tcl];\n\n  for (const t of all) {\n    const fn = t?.function || {};\n    let a = fn.arguments;\n    if (!a) continue;\n    if (typeof a === 'string') {\n      try { a = JSON.parse(a); } catch { /* ignore parse errors */ }\n    }\n    if (a && (a.bookingId || a.confirm || a.phone)) return a;\n  }\n  return {};\n}\n\nconst args = extractArgs();\n\n// 3) Normalized fields\nconst bookingId = String(args.bookingId || args.id || args.eventId || '').trim();\nconst confirm   = String(args.confirm || args.confirmation || '').trim().toLowerCase();\nconst phoneRaw  = String(args.phone || '').trim();\n\n// 4) Tiny phone normalizer\nfunction normPhone(raw, defaultCountry = 'US') {\n  const digits = (raw.match(/\\d/g) || []).join('');\n  if (!digits) return { e164: '', digits: '', isValid: false };\n  if (digits.length === 10 && defaultCountry === 'US') {\n    return { e164: `+1${digits}`, digits, isValid: true };\n  }\n  return {\n    e164: raw.startsWith('+') ? raw : `+${digits}`,\n    digits,\n    isValid: digits.length >= 7\n  };\n}\nconst phoneNorm = normPhone(phoneRaw);\n\n// 5) Must have identifier: bookingId OR phone\nif (!bookingId && !phoneNorm.isValid) {\n  return [{\n    json: {\n      result: 'missing_identifier',\n      message: 'Provide either a bookingId or phone.',\n      phone: '',\n      phoneValid: false,\n      bookingId: '',\n      toolCallId\n    }\n  }];\n}\n\n// 6) Must have confirm:\"yes\"\nif (confirm !== 'yes') {\n  return [{\n    json: {\n      result: 'user_declined',\n      message: 'Say confirm:\"yes\" to cancel.',\n      toolCallId\n    }\n  }];\n}\n\n// 7) Pass forward clean shape + routing flags (+ toolCallId)\nreturn [{\n  json: {\n    result: 'validated',\n    confirm: 'yes',\n    bookingId,\n    phone: phoneNorm.e164 || '',\n    phoneDigits: phoneNorm.digits || '',\n    phoneValid: !!phoneNorm.isValid,\n    hasId: !!bookingId,\n    hasPhone: !!phoneNorm.isValid,\n    toolCallId\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        0
+      ],
+      "id": "90408eb4-a479-4aa7-906c-27274ab21129",
+      "name": "Validate Cancel"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$item(0).$json}}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1056,
+        -64
+      ],
+      "id": "589d0636-ada3-4c58-96bf-0702ea87c93d",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "returnAll": true,
+        "timeMin": "",
+        "timeMax": "",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -528,
+        0
+      ],
+      "id": "021af235-20be-4ca2-9684-b348f52cc36e",
+      "name": "Get many events",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0yByGfoje3gvnxgr",
+          "name": "Google Calendar account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "eventId": "={{$json.bookingId || $json.appointment?.id || $json.carry?.bookingId || $json.id}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        -224
+      ],
+      "id": "34f57614-626b-421e-9502-bec5bf42bab1",
+      "name": "Delete an event",
+      "alwaysOutputData": false,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0yByGfoje3gvnxgr",
+          "name": "Google Calendar account 4"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "856be298-1e69-4ebb-8c48-2b6cd9a2b8fe",
+              "leftValue": "={{ !!(\n  $json.bookingId ||\n  $json.appointment?.id ||\n  $json.carry?.bookingId ||\n  $json.body?.bookingId ||\n  $json.parameters?.bookingId\n) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        176,
+        0
+      ],
+      "id": "8e0fbb9b-9498-49ab-91d5-c2d3873117bc",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Always return a clean cancel result (idempotent)\nconst id =\n  $json.id ||\n  $json.eventId ||\n  $item(0).$node[\"Validate Cancel\"]?.json?.bookingId ||\n  $json.bookingId || \"\";\n\nconst hadError = !!$json.error || /invalid|deleted|not\\s*found|gone/i.test(JSON.stringify($json));\n\nreturn [{\n  json: {\n    result: \"canceled\",\n    status: hadError ? \"already_deleted_or_not_found\" : \"deleted\",\n    bookingId: id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -224
+      ],
+      "id": "3717029b-83ff-4024-967c-02aae7845591",
+      "name": "Code (OK)"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      result: $json.result ?? 'not_found',\n      bookingId:\n        $json.bookingId ??\n        $json.id ??\n        $json.eventId ??\n        $json.event?.id ??\n        $json.parameters?.bookingId ??\n        $json.body?.bookingId ??\n        '',\n      message:\n        $json.message ?? 'No appointment found for that phone or bookingId.'\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        128
+      ],
+      "id": "00a7d426-27f8-4e48-9b1b-665f8990c374",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Events array from GCal \"Get many events\"\nconst events = $input.all().map(i => i.json);\n\n// Get phone and bookingId from Validate Cancel node\nconst validateNode = $item(0).$node[\"Validate Cancel\"]?.json || {};\nconst phoneRaw = validateNode.phone || \"\";\nconst bookingId = validateNode.bookingId || \"\";\n\nconst phoneDigits = (phoneRaw.match(/\\d/g) || []).join(\"\"); // keep only digits\nconst last10 = phoneDigits.slice(-10);\nconst last7 = phoneDigits.slice(-7);\n\nconsole.log(\"Phone raw:\", phoneRaw);\nconsole.log(\"Phone digits:\", phoneDigits);\nconsole.log(\"Booking ID:\", bookingId);\nconsole.log(\"Total events:\", events.length);\n\n// Helper to build debug object\nconst buildDebug = () => ({\n  phoneRaw,\n  phoneDigits,\n  bookingId: bookingId || undefined\n});\n\n// Helper to build carry object\nconst buildCarry = (hasMatch = false) => {\n  const carry = {};\n  \n  // Only set \"need\" if we don't have a match yet\n  if (!hasMatch && (!phoneDigits || phoneDigits.length < 7)) {\n    carry.need = \"phone\";\n  } else if (phoneDigits && phoneDigits.length >= 7) {\n    carry.phone = phoneDigits;\n  }\n  \n  if (bookingId) {\n    carry.bookingId = bookingId;\n  }\n  \n  return carry;\n};\n\n// Helper: parse start date\nconst sDate = e => {\n  const startTime = e.start?.dateTime || e.start?.date || 0;\n  return new Date(startTime).getTime() || 0;\n};\n\nconst now = Date.now();\n\n// Build a searchable text blob for each event\nconst bucket = e => {\n  const parts = [\n    e.summary || \"\",\n    e.description || \"\",\n    e.location || \"\",\n    e.hangoutLink || \"\",\n    e.htmlLink || \"\",\n    e.organizer?.email || \"\",\n    e.creator?.email || \"\"\n  ];\n  \n  // Add attendees\n  if (e.attendees && Array.isArray(e.attendees)) {\n    e.attendees.forEach(a => {\n      parts.push(a.email || \"\");\n      parts.push(a.displayName || \"\");\n    });\n  }\n  \n  return parts.join(\" \").toLowerCase();\n};\n\n// Convert a blob to just digits (for phone comparisons)\nconst digits = txt => (txt.match(/\\d/g) || []).join(\"\");\n\n// Match rule for phone: full digits OR last10 OR last7 anywhere in the event text\nconst matchesPhone = e => {\n  if (!phoneDigits || phoneDigits.length < 7) return false;\n  \n  const eventText = bucket(e);\n  const eventDigits = digits(eventText);\n  \n  const fullMatch = phoneDigits && eventDigits.includes(phoneDigits);\n  const last10Match = last10 && eventDigits.includes(last10);\n  const last7Match = last7 && eventDigits.includes(last7);\n  \n  return fullMatch || last10Match || last7Match;\n};\n\n// Match rule for bookingId: check Google Calendar identifiers AND text blob\nconst matchesBookingId = e => {\n  if (!bookingId) return false;\n  \n  // Check actual Google Calendar identifiers first\n  if (e.id === bookingId || e.iCalUID === bookingId) {\n    return true;\n  }\n  \n  // Also check if bookingId appears in the text (description, etc.)\n  const eventText = bucket(e);\n  return eventText.includes(bookingId.toLowerCase());\n};\n\n// Helper to format appointment\nconst formatAppointment = e => {\n  return {\n    id: e.id,\n    start: (e.start?.dateTime || e.start?.date || \"\").split(/[+-]\\d{2}:\\d{2}/)[0],\n    end: (e.end?.dateTime || e.end?.date || \"\").split(/[+-]\\d{2}:\\d{2}/)[0],\n    timezone: e.start?.timeZone || \"America/Chicago\",\n    summary: e.summary || \"\"\n  };\n};\n\n// Check if Validate Cancel already returned an error\nif (validateNode.result === 'invalid_phone') {\n  // Pass through the error from Validate Cancel\n  return [{\n    json: {\n      result: \"invalid_phone\",\n      message: validateNode.message || \"The phone number you provided is invalid.\",\n      carry: buildCarry(),\n      debug: { ...buildDebug(), matchedBy: '' }\n    }\n  }];\n}\n\n// Try matching by bookingId first (more specific)\nlet pool = [];\nlet matchMethod = \"\";\n\nif (bookingId) {\n  pool = events.filter(matchesBookingId);\n  if (pool.length > 0) {\n    matchMethod = \"bookingId\";\n    console.log(`Matched ${pool.length} events by bookingId`);\n  }\n}\n\n// If no bookingId match, try phone\nif (pool.length === 0 && phoneDigits && phoneDigits.length >= 7) {\n  pool = events.filter(matchesPhone);\n  if (pool.length > 0) {\n    matchMethod = \"phone\";\n  }\n}\n\n// If still no matches and no valid identifiers, ask for phone\nif (pool.length === 0 && (!phoneDigits || phoneDigits.length < 7) && !bookingId) {\n  return [{\n    json: {\n      result: \"need_phone\",\n      message: \"I don't have your phone number yet. What number did you use to book?\",\n      carry: buildCarry(),\n      debug: { ...buildDebug(), matchedBy: matchMethod }\n    }\n  }];\n}\n\n// Prefer upcoming among matches\nif (pool.length > 0) {\n  const upcoming = pool.filter(e => sDate(e) >= now);\n  if (upcoming.length > 0) {\n    pool = upcoming;\n  }\n}\n\n// Handle results based on number of matches\nif (pool.length === 0) {\n  return [{\n    json: {\n      result: \"not_found\",\n      message: \"No appointment found for that phone or booking ID.\",\n      carry: buildCarry(),\n      debug: { ...buildDebug(), matchedBy: matchMethod }\n    }\n  }];\n}\n\nif (pool.length === 1) {\n  return [{\n    json: {\n      result: \"appointment_found\",\n      appointment: formatAppointment(pool[0]),\n      carry: buildCarry(true), // Pass true to indicate we found a match\n      debug: { ...buildDebug(), matchedBy: matchMethod }\n    }\n  }];\n}\n\n// Multiple matches - sort by start time\npool.sort((a, b) => sDate(a) - sDate(b));\n\nreturn [{\n  json: {\n    result: \"multiple_found\",\n    appointments: pool.map(formatAppointment),\n    carry: buildCarry(),\n    debug: { ...buildDebug(), matchedBy: matchMethod }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        0
+      ],
+      "id": "1b1477b7-d097-4ee5-91fe-97785685219a",
+      "name": "code"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Hoist bookingId to root so the IF can see it\nconst b =\n  $json.bookingId ??\n  $json.appointment?.id ??\n  $json.carry?.bookingId ??\n  $json.body?.bookingId ??\n  $json.parameters?.bookingId ??\n  '';\n\nreturn [\n  {\n    json: {\n      ...$json,\n      bookingId: b\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ],
+      "id": "952d71ae-a8a4-427b-ac37-277aa00135fb",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "path": "vapi/cancel-ui",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -864,
+        352
+      ],
+      "id": "5069828c-d2eb-49f5-86a3-3e0e996c46ff",
+      "name": "vapi/cancel-ui",
+      "webhookId": "8533184e-1c3c-465e-bac5-28b0efa8e8e6"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!doctype html>\n<html>\n<head>\n  <meta charset=\"utf-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <title>Cancel Appointment</title>\n  <style>\n    :root { --ok:#065f46; --okbg:#ecfdf5; --okbd:#a7f3d0; --err:#991b1b; --errbg:#fef2f2; --errbd:#fecaca; --muted:#667085; }\n    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px}\n    .card{border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 6px 18px rgba(0,0,0,.06);background:#fff}\n    .row{display:flex;gap:12px;flex-wrap:wrap}\n    input,button{font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1}\n    button{cursor:pointer}\n    pre{background:#0b1020;color:#cbe2ff;padding:12px;border-radius:10px;overflow:auto;max-height:40vh}\n    .badge{display:inline-flex;align-items:center;gap:8px;font-weight:600;padding:6px 10px;border-radius:999px;border:1px solid transparent}\n    .badge.working{color:#1f2937;background:#eef2ff;border-color:#c7d2fe}\n    .badge.ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}\n    .badge.err{color:var(--err);background:var(--errbg);border-color:var(--errbd)}\n    .muted{color:var(--muted);font-size:12px}\n    .hidden{display:none}\n    label{font-weight:600;margin-top:8px;display:block}\n  </style>\n</head>\n<body>\n  <div class=\"card\">\n    <h1>Cancel your appointment</h1>\n\n    <label>Booking ID</label>\n    <input id=\"bookingId\" placeholder=\"Paste booking ID (from calendar link)\" />\n\n    <div class=\"muted\">or</div>\n\n    <label>Phone (E.164)</label>\n    <input id=\"phone\" placeholder=\"+1xxxxxxxxxx or +91xxxxxxxxxx\" />\n\n    <div class=\"row\" style=\"margin-top:12px\">\n      <button id=\"go\">Cancel now</button>\n      <span id=\"status\" class=\"badge hidden\">Working…</span>\n    </div>\n\n    <pre id=\"out\" class=\"hidden\"></pre>\n  </div>\n\n  <script>\n    // Pre-fill from querystring (RDC adds these if present)\n    const qs = new URLSearchParams(location.search);\n    const byId = (x)=>document.getElementById(x);\n    if (qs.get('bookingId')) byId('bookingId').value = qs.get('bookingId');\n    if (qs.get('phone'))     byId('phone').value     = qs.get('phone');\n\n    const POST_URL = 'https://polarmedia.app.n8n.cloud/webhook/vapi/cancel'; // same workflow\n\n    function showBadge(cls, text){\n      const el = byId('status');\n      el.className = 'badge ' + cls;\n      el.textContent = text;\n      el.classList.remove('hidden');\n    }\n    function hideBadge(){ byId('status').classList.add('hidden'); }\n\n    function showOut(obj){\n      const el = byId('out');\n      el.classList.remove('hidden');\n      try { el.textContent = JSON.stringify(obj, null, 2); }\n      catch { el.textContent = String(obj); }\n    }\n\n    async function cancelNow(){\n      const bookingId = byId('bookingId').value.trim();\n      const phone     = byId('phone').value.trim();\n\n      if (!bookingId && !phone){\n        showBadge('err','Need bookingId or phone');\n        showOut({error:'Provide bookingId or phone'});\n        return;\n      }\n\n      showBadge('working','Working…');\n      showOut('');\n\n      const payload = { bookingId, phone, confirm:'yes' };\n\n      try{\n        const res  = await fetch(POST_URL, {\n          method: 'POST',\n          headers: { 'Content-Type':'application/json' },\n          body: JSON.stringify(payload)\n        });\n        const text = await res.text();\n        let data;\n        try { data = JSON.parse(text); } catch { data = { raw:text }; }\n\n        // Success → flip to OK; Already deleted still OK (idempotent)\n        if (res.ok){\n          showBadge('ok','Canceled');\n          showOut(data);\n        } else {\n          showBadge('err',`Error ${res.status}`);\n          showOut(data);\n        }\n      }catch(e){\n        showBadge('err','Network error');\n        showOut({error:String(e)});\n      }\n    }\n\n    byId('go').addEventListener('click', cancelNow);\n  </script>\n</body>\n</html>",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -608,
+        352
+      ],
+      "id": "77ef4337-87c7-4896-9ac7-e3ad6ad01ab1",
+      "name": "Respond to Webhook1"
+    },
+    {
+      "parameters": {
+        "jsCode": " // Vapi-compliant wrapper for cancel_tool\n\n  // Try to carry forward an id from any upstream branch\n  let id = '';\n  if ($json.bookingId) {\n    id = $json.bookingId;\n  } else if ($json.appointment && $json.appointment.id) {\n    id = $json.appointment.id;\n  } else if ($json.carry && $json.carry.bookingId) {\n    id = $json.carry.bookingId;\n  } else if ($json.id) {\n    id = $json.id;\n  }\n\n  // Detect already deleted or not found but still return success\n  const hadError = !!$json.error ||\n  /invalid|deleted|not\\s*found|gone/i.test(JSON.stringify($json));\n\n  // Human message\n  const message = hadError\n    ? 'This appointment was already canceled or not found.'\n    : 'Appointment canceled.';\n\n  // Tool-mapped payload for the assistant\n  const payload = {\n    result: hadError ? 'already_deleted_or_not_found' : 'canceled',\n    bookingId: id,\n    message: message\n  };\n\n  // Pull the toolCallId from multiple places\n  let toolCallId = '';\n\n  // Try from $json.toolCallId\n  if ($json.toolCallId) {\n    toolCallId = $json.toolCallId;\n  }\n\n  // Try from Validate Cancel node\n  if (!toolCallId) {\n    try {\n      const validateNode = $item(0).$node['Validate Cancel'];\n      if (validateNode && validateNode.json && validateNode.json.toolCallId)\n   {\n        toolCallId = validateNode.json.toolCallId;\n      }\n    } catch (e) {\n      // ignore\n    }\n  }\n\n  // Try from $json.body.message.toolCalls\n  if (!toolCallId) {\n    if ($json.body && $json.body.message && $json.body.message.toolCalls &&\n  $json.body.message.toolCalls[0] && $json.body.message.toolCalls[0].id) {\n      toolCallId = $json.body.message.toolCalls[0].id;\n    }\n  }\n\n  // Try from $json.body.message.toolCallList\n  if (!toolCallId) {\n    if ($json.body && $json.body.message && $json.body.message.toolCallList\n  && $json.body.message.toolCallList[0] &&\n  $json.body.message.toolCallList[0].id) {\n      toolCallId = $json.body.message.toolCallList[0].id;\n    }\n  }\n\n  // Try from Webhook node - path 1\n  if (!toolCallId) {\n    try {\n      const webhookNode = $item(0).$node['Webhook'];\n      if (webhookNode && webhookNode.json && webhookNode.json.body &&\n  webhookNode.json.body.message && webhookNode.json.body.message.toolCalls\n  && webhookNode.json.body.message.toolCalls[0] &&\n  webhookNode.json.body.message.toolCalls[0].id) {\n        toolCallId = webhookNode.json.body.message.toolCalls[0].id;\n      }\n    } catch (e) {\n      // ignore\n    }\n  }\n\n  // Try from Webhook node - path 2\n  if (!toolCallId) {\n    try {\n      const webhookNode = $item(0).$node['Webhook'];\n      if (webhookNode && webhookNode.json && webhookNode.json.message &&\n  webhookNode.json.message.toolCalls &&\n  webhookNode.json.message.toolCalls[0] &&\n  webhookNode.json.message.toolCalls[0].id) {\n        toolCallId = webhookNode.json.message.toolCalls[0].id;\n      }\n    } catch (e) {\n      // ignore\n    }\n  }\n\n  // Final wrapper in Vapi format\n  return [{\n    json: {\n      ok: true,\n      endpoint: 'vapi/cancel',\n      phase: 'commit',\n      results: [\n        {\n          toolCallId: toolCallId,\n          result: JSON.stringify(payload)\n        }\n      ]\n    }\n  }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        -64
+      ],
+      "id": "4f238846-ee9c-4c0a-94e0-93e18a4bb950",
+      "name": "Vapi Wrapper (Cancel)"
+    }
+  ],
+  "pinData": {
+    "Webhook": [
+      {
+        "json": {
+          "headers": {
+            "host": "polarmedia.app.n8n.cloud",
+            "user-agent": "axios/1.8.3",
+            "content-length": "23125",
+            "accept": "application/json, text/plain, */*",
+            "accept-encoding": "gzip, br",
+            "baggage": "sentry-environment=production,sentry-public_key=fac6f282c765ce50b18c3fa0305f8a8b,sentry-trace_id=1116c0310dac44a4ae8cbfae6430e7e6",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "167.150.225.50",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "US",
+            "cf-ray": "99b42df8c437c8da-PDX",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "cookie": "callId=",
+            "sentry-trace": "1116c0310dac44a4ae8cbfae6430e7e6-8d9b4abe3fd4df8a",
+            "traceparent": "00-4c19fba63dcbdd60f3f551d73c2764fb-540527629cf96fe1-01",
+            "x-chat-id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f",
+            "x-forwarded-for": "167.150.225.50, 104.23.160.199",
+            "x-forwarded-host": "polarmedia.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-18-7959cfc789-rqqrl",
+            "x-is-trusted": "yes",
+            "x-real-ip": "167.150.225.50",
+            "x-vapi-secret": ""
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "message": {
+              "timestamp": 1762595567477,
+              "type": "tool-calls",
+              "toolCalls": [
+                {
+                  "id": "call_xG77783sChY1418Jcry3W9RS",
+                  "type": "function",
+                  "function": {
+                    "name": "cancel_tool",
+                    "arguments": {
+                      "bookingId": "s38gplsjet28s5eiovroqirr2o",
+                      "confirm": "yes"
+                    }
+                  },
+                  "isPrecededByText": true
+                }
+              ],
+              "toolCallList": [
+                {
+                  "id": "call_xG77783sChY1418Jcry3W9RS",
+                  "type": "function",
+                  "function": {
+                    "name": "cancel_tool",
+                    "arguments": {
+                      "bookingId": "s38gplsjet28s5eiovroqirr2o",
+                      "confirm": "yes"
+                    }
+                  },
+                  "isPrecededByText": true
+                }
+              ],
+              "toolWithToolCallList": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "cancel_tool",
+                    "strict": true,
+                    "parameters": {
+                      "type": "object",
+                      "required": [
+                        "confirm",
+                        "bookingId"
+                      ],
+                      "properties": {
+                        "phone": {
+                          "type": "string",
+                          "description": "Phone number used when booking"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "description": "Optional reason provided by caller"
+                        },
+                        "confirm": {
+                          "enum": [
+                            "yes"
+                          ],
+                          "type": "string",
+                          "description": "Must be 'yes' to proceed with cancellation"
+                        },
+                        "bookingId": {
+                          "type": "string",
+                          "default": "",
+                          "description": "Event ID to cancel (preferred if available)"
+                        }
+                      }
+                    },
+                    "description": "Use this tool to cancel an appointment only when bookingId is already provided or known.\nIf the user says “cancel booking ID …”, do not ask for phone/email.\nFirst ask: “Please confirm you want to cancel booking ID ____ by replying yes.”\nOnly when the user replies “yes”, call this tool with { bookingId, confirm: \"yes\" }.\nIf no bookingId is provided, ask for phone/email first and call lookup_tool.\nNever ask for phone/email after a bookingId is given."
+                  },
+                  "server": {
+                    "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/cancel",
+                    "headers": {
+                      "X-Chat-Id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f",
+                      "Content-Type": "application/json"
+                    }
+                  },
+                  "messages": [
+                    {
+                      "type": "request-start",
+                      "contents": [],
+                      "conditions": [],
+                      "blocking": false
+                    }
+                  ],
+                  "toolCall": {
+                    "id": "call_xG77783sChY1418Jcry3W9RS",
+                    "type": "function",
+                    "function": {
+                      "name": "cancel_tool",
+                      "arguments": {
+                        "bookingId": "s38gplsjet28s5eiovroqirr2o",
+                        "confirm": "yes"
+                      }
+                    },
+                    "isPrecededByText": true
+                  }
+                }
+              ],
+              "artifact": {
+                "messages": [
+                  {
+                    "role": "system",
+                    "message": "[Identity]\n-You are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → book new appointments\nRequires: name, email, phone, title, service_type, startIso, endIso, timezone.\nWhen the caller explicitly picks a slot, also send: confirm: \"yes\".\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n“Thanks for reaching QuantumOps IT Solutions. I’m Alex, your scheduling assistant. How...",
+                    "time": 1762595563510,
+                    "secondsFromStart": 0
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?",
+                    "time": 1762595563510,
+                    "secondsFromStart": 0,
+                    "endTime": 1762595563510
+                  },
+                  {
+                    "role": "user",
+                    "message": "Cancel my appointment. Phone +1 206-555-0175.",
+                    "time": 1762595563511,
+                    "secondsFromStart": 0,
+                    "endTime": 1762595563510
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Let me look up your appointment using the phone number you provided. One moment, please.",
+                    "time": 1762595563512,
+                    "secondsFromStart": 0,
+                    "endTime": 1762595563510
+                  },
+                  {
+                    "role": "tool_calls",
+                    "toolCalls": [
+                      {
+                        "id": "call_TIwD86PNibvUzC0HBR81uLBE",
+                        "type": "function",
+                        "function": {
+                          "name": "lookup_tool",
+                          "arguments": "{\"phone\": \"+12065550175\"}"
+                        }
+                      }
+                    ],
+                    "message": "",
+                    "time": 1762595563513,
+                    "secondsFromStart": 0
+                  },
+                  {
+                    "role": "tool_call_result",
+                    "toolCallId": "call_TIwD86PNibvUzC0HBR81uLBE",
+                    "name": "call_TIwD86PNibvUzC0HBR81uLBE",
+                    "result": "{\"result\":\"appointment_found\",\"appointment\":{\"id\":\"s38gplsjet28s5eiovroqirr2o\",\"start\":\"2025-11-08T00:30:00+05:30\",\"end\":\"2025-11-08T01:00:00+05:30\",\"timezone\":\"America/Chicago\",\"summary\":\"Appointment: Sam Patel\"},\"carry\":{\"phone\":\"12065550175\"},\"debug\":{\"bookingId\":\"\",\"phoneDigits\":\"12065550175\",\"matchedBy\":\"phone\"}}",
+                    "time": 1762595563514,
+                    "secondsFromStart": 0
+                  },
+                  {
+                    "role": "bot",
+                    "message": "I found your appointment scheduled for November 7th at 6:30 PM (America/Chicago). Please confirm if you'd like to cancel this appointment by replying \"yes.\"",
+                    "time": 1762595563515,
+                    "secondsFromStart": 0,
+                    "endTime": 1762595563510
+                  },
+                  {
+                    "role": "user",
+                    "message": "yes",
+                    "time": 1762595563516,
+                    "secondsFromStart": 0,
+                    "endTime": 1762595563510
+                  },
+                  {
+                    "toolCalls": [
+                      {
+                        "id": "call_nB3pkByW3LWm1Mw9yumV3CYM",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel_tool",
+                          "arguments": "{\n  \"bookingId\": \"s38gplsjet28s5eiovroqirr2o\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ],
+                    "role": "tool_calls",
+                    "message": "",
+                    "time": 1762595564205,
+                    "secondsFromStart": 0.695
+                  },
+                  {
+                    "role": "tool_call_result",
+                    "time": 1762595565311,
+                    "secondsFromStart": 1.801,
+                    "name": "cancel_tool",
+                    "result": "No result returned for call_nB3pkByW3LWm1Mw9yumV3CYM. If this is unexpected, see troubleshooting tips at https://docs.vapi.ai/tools/custom-tools-troubleshooting#no-result-returned-error.",
+                    "metadata": {},
+                    "toolCallId": "call_nB3pkByW3LWm1Mw9yumV3CYM"
+                  },
+                  {
+                    "toolCalls": [
+                      {
+                        "id": "call_QGDxhceUDTDRKpMC18oSyxIA",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel_tool",
+                          "arguments": "{\n  \"bookingId\": \"s38gplsjet28s5eiovroqirr2o\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ],
+                    "role": "tool_calls",
+                    "message": "",
+                    "time": 1762595565975,
+                    "secondsFromStart": 2.465
+                  },
+                  {
+                    "role": "bot",
+                    "message": "It seems there was an issue processing the cancellation. I apologize for the inconvenience. Let me try again to ensure your appointment is canceled. One moment, please.",
+                    "time": 1762595563510,
+                    "endTime": 2468,
+                    "secondsFromStart": 2.468
+                  },
+                  {
+                    "role": "tool_call_result",
+                    "time": 1762595566742,
+                    "secondsFromStart": 3.232,
+                    "name": "cancel_tool",
+                    "result": "No result returned for call_QGDxhceUDTDRKpMC18oSyxIA. If this is unexpected, see troubleshooting tips at https://docs.vapi.ai/tools/custom-tools-troubleshooting#no-result-returned-error.",
+                    "metadata": {},
+                    "toolCallId": "call_QGDxhceUDTDRKpMC18oSyxIA"
+                  },
+                  {
+                    "toolCalls": [
+                      {
+                        "id": "call_xG77783sChY1418Jcry3W9RS",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel_tool",
+                          "arguments": "{\n  \"bookingId\": \"s38gplsjet28s5eiovroqirr2o\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ],
+                    "role": "tool_calls",
+                    "message": "",
+                    "time": 1762595567471,
+                    "secondsFromStart": 3.961
+                  },
+                  {
+                    "role": "bot",
+                    "message": "It seems there was an issue processing the cancellation. I apologize for the inconvenience. Let me try again to ensure your appointment is canceled. One moment, please.",
+                    "time": 1762595563510,
+                    "endTime": 3963,
+                    "secondsFromStart": 3.963
+                  }
+                ],
+                "messagesOpenAIFormatted": [
+                  {
+                    "role": "system",
+                    "content": "[Identity]\n-You are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → book new appointments\nRequires: name, email, phone, title, service_type, startIso, endIso, timezone.\nWhen the caller explicitly picks a slot, also send: confirm: \"yes\".\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n“Thanks for reaching QuantumOps IT Solutions. I’m Alex, your scheduling assistant. How..."
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today? It seems there was an issue processing the cancellation. I apologize for the inconvenience. Let me try again to ensure your appointment is canceled. One moment, please. It seems there was an issue processing the cancellation. I apologize for the inconvenience. Let me try again to ensure your appointment is canceled. One moment, please."
+                  },
+                  {
+                    "role": "user",
+                    "content": "Cancel my appointment. Phone +1 206-555-0175."
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Let me look up your appointment using the phone number you provided. One moment, please.",
+                    "tool_calls": [
+                      {
+                        "id": "call_TIwD86PNibvUzC0HBR81uLBE",
+                        "type": "function",
+                        "function": {
+                          "name": "lookup_tool",
+                          "arguments": "{\"phone\": \"+12065550175\"}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_TIwD86PNibvUzC0HBR81uLBE",
+                    "content": "{\"result\":\"appointment_found\",\"appointment\":{\"id\":\"s38gplsjet28s5eiovroqirr2o\",\"start\":\"2025-11-08T00:30:00+05:30\",\"end\":\"2025-11-08T01:00:00+05:30\",\"timezone\":\"America/Chicago\",\"summary\":\"Appointment: Sam Patel\"},\"carry\":{\"phone\":\"12065550175\"},\"debug\":{\"bookingId\":\"\",\"phoneDigits\":\"12065550175\",\"matchedBy\":\"phone\"}}"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "I found your appointment scheduled for November 7th at 6:30 PM (America/Chicago). Please confirm if you'd like to cancel this appointment by replying \"yes.\""
+                  },
+                  {
+                    "role": "user",
+                    "content": "yes"
+                  },
+                  {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_nB3pkByW3LWm1Mw9yumV3CYM",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel_tool",
+                          "arguments": "{\n  \"bookingId\": \"s38gplsjet28s5eiovroqirr2o\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_nB3pkByW3LWm1Mw9yumV3CYM",
+                    "content": "No result returned for call_nB3pkByW3LWm1Mw9yumV3CYM. If this is unexpected, see troubleshooting tips at https://docs.vapi.ai/tools/custom-tools-troubleshooting#no-result-returned-error."
+                  },
+                  {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_QGDxhceUDTDRKpMC18oSyxIA",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel_tool",
+                          "arguments": "{\n  \"bookingId\": \"s38gplsjet28s5eiovroqirr2o\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_QGDxhceUDTDRKpMC18oSyxIA",
+                    "content": "No result returned for call_QGDxhceUDTDRKpMC18oSyxIA. If this is unexpected, see troubleshooting tips at https://docs.vapi.ai/tools/custom-tools-troubleshooting#no-result-returned-error."
+                  },
+                  {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_xG77783sChY1418Jcry3W9RS",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel_tool",
+                          "arguments": "{\n  \"bookingId\": \"s38gplsjet28s5eiovroqirr2o\",\n  \"confirm\": \"yes\"\n}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_xG77783sChY1418Jcry3W9RS",
+                    "content": "Tool Result Still Pending But Proceed Further If Possible."
+                  }
+                ]
+              },
+              "chat": {
+                "id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f",
+                "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                "createdAt": "2025-09-19T04:19:36.443Z",
+                "updatedAt": "2025-11-07T10:42:08.785Z"
+              },
+              "assistant": {
+                "id": "cda9d127-ac08-45d3-93d7-3d18ad9570fc",
+                "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                "name": "appointment_assistance",
+                "voice": {
+                  "voiceId": "Elliot",
+                  "provider": "vapi"
+                },
+                "createdAt": "2025-09-19T07:58:36.229Z",
+                "updatedAt": "2025-11-08T05:35:14.163Z",
+                "model": {
+                  "model": "gpt-4o",
+                  "toolIds": [
+                    "e3e93618-65cc-430e-96a1-99e96c97a6ab",
+                    "1de0d2dd-c744-4607-8bff-bdef102267f5",
+                    "90091906-a3a3-43e9-86b4-1ec9d70aeb4e",
+                    "da8f8d98-221e-4a14-94e4-2435224a5eb4",
+                    "0110b0d0-50db-4594-b468-8646899301bc"
+                  ],
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": "[Identity]\n-You are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → book new appointments\nRequires: name, email, phone, title, service_type, startIso, endIso, timezone.\nWhen the caller explicitly picks a slot, also send: confirm: \"yes\".\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n“Thanks for reaching QuantumOps IT Solutions. I’m Alex, your scheduling assistant. How can I help you today?”\n\n[Dialog Flow]\n-New booking\nGather: service type (support/maintenance/consultation/onsite/emergency), date, time, name, email, phone.\nIf date or time is missing, ask for the missing piece.\n\nAfter the caller confirms the slot, call function_tool with all fields and confirm: \"yes\".\n\n-Lookup → Confirm → Cancel / Reschedule\nAfter lookup_tool:\nfound: “I found an appointment on {{DATE}} at {{TIME}} ({{TIMEZONE}}). Do you want to cancel or reschedule it?”\n\nnot_found: “I couldn’t find a booking with that info. Would you like to try a different phone or an email?”\n\nneed_phone: “What phone number did you use to book?”\n\n-Cancel: on “yes”, call cancel_tool with { bookingId, confirm: \"yes\" }.\n\n-Reschedule: ask for new date/time, convert to ISO, call reschedule_tool.\n\n[Alternatives & Missing Info]\n\nIf no_free_slot, read 1–2 options from alternatives, ask the caller to pick, then call the relevant tool again with the chosen times.\n\nIf need_more_info, ask only for the fields listed.\n\n[Timezone & Time Conversion Rules]\nDefault timezone: America/Chicago (unless the caller specifies another IANA timezone).\n\nIf the caller gives a date without a year, choose the next future occurrence of that month/day.\n\nConvert requested local time to UTC ISO with Z (e.g., 2025-11-10T16:00:00Z) and also set timezone: \"America/Chicago\".\n\nObserve DST correctly (after the first Sunday in November, America/Chicago is UTC−06:00).\n\n[State to Track]\nPersist across turns:\nphone       → caller’s number (E.164 if possible)\nbookingId   → from lookup/cancel/reschedule\nstage       → \"new\" | \"confirm\" | \"reschedule\" | \"cancel\"\ncarry       → { title, startIso, endIso, timezone }\n\n[Cancellation Policy]\nPhone-first: If user requests cancel and bookingId isn’t known, use lookup_tool with phone (or email). Confirm using a human summary (date/time/timezone). Do not read or ask for long booking IDs.\n\n[Operating Context]\nRegular hours: Mon–Fri, 9 AM–6 PM America/Chicago (emergencies may be outside these hours).\nNew clients: 30-minute onboarding.\nCancellations must be ≥ 24 hours in advance.\n\n[Silence/Disconnect]\nIf the call disconnects or silence >10 s: call recover_tool with what you know, then end the call politely."
+                    }
+                  ],
+                  "provider": "openai",
+                  "temperature": 0.5,
+                  "tools": [
+                    {
+                      "id": "e3e93618-65cc-430e-96a1-99e96c97a6ab",
+                      "createdAt": "2025-11-04T09:32:33.595Z",
+                      "updatedAt": "2025-11-08T04:49:04.613Z",
+                      "type": "function",
+                      "function": {
+                        "name": "reschedule_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "newStartIso",
+                            "newEndIso",
+                            "bookingId",
+                            "timezone"
+                          ],
+                          "properties": {
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used to identify the existing appointment (fallback if no bookingId)"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "",
+                              "description": "IANA timezone, e.g., America/Chicago\n"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Exact Google Calendar event id, if known (preferred)"
+                            },
+                            "newEndIso": {
+                              "type": "string",
+                              "description": "New appointment end time in ISO format"
+                            },
+                            "newStartIso": {
+                              "type": "string",
+                              "description": "New appointment start time in ISO format"
+                            }
+                          }
+                        }
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/reschedule",
+                        "headers": {
+                          "X-Chat-Id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f"
+                        }
+                      }
+                    },
+                    {
+                      "id": "1de0d2dd-c744-4607-8bff-bdef102267f5",
+                      "createdAt": "2025-11-04T09:35:30.518Z",
+                      "updatedAt": "2025-11-05T09:56:51.667Z",
+                      "type": "function",
+                      "function": {
+                        "name": "cancel_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "confirm",
+                            "bookingId"
+                          ],
+                          "properties": {
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used when booking"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "description": "Optional reason provided by caller"
+                            },
+                            "confirm": {
+                              "enum": [
+                                "yes"
+                              ],
+                              "type": "string",
+                              "description": "Must be 'yes' to proceed with cancellation"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Event ID to cancel (preferred if available)"
+                            }
+                          }
+                        },
+                        "description": "Use this tool to cancel an appointment only when bookingId is already provided or known.\nIf the user says “cancel booking ID …”, do not ask for phone/email.\nFirst ask: “Please confirm you want to cancel booking ID ____ by replying yes.”\nOnly when the user replies “yes”, call this tool with { bookingId, confirm: \"yes\" }.\nIf no bookingId is provided, ask for phone/email first and call lookup_tool.\nNever ask for phone/email after a bookingId is given."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/cancel",
+                        "headers": {
+                          "X-Chat-Id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "90091906-a3a3-43e9-86b4-1ec9d70aeb4e",
+                      "createdAt": "2025-11-04T09:41:02.185Z",
+                      "updatedAt": "2025-11-05T10:52:33.488Z",
+                      "type": "function",
+                      "function": {
+                        "name": "lookup_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [],
+                          "properties": {
+                            "email": {
+                              "type": "string",
+                              "description": "Email used when booking"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used when booking"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "description": "Exact Google Calendar event id if known"
+                            },
+                            "rangeEndIso": {
+                              "type": "string",
+                              "description": "Optional search window end (ISO)"
+                            },
+                            "rangeStartIso": {
+                              "type": "string",
+                              "description": "Optional search window start (ISO)"
+                            }
+                          }
+                        },
+                        "description": "Provide either phone or email. If neither is known, ask the user for one."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi-lookup",
+                        "headers": {
+                          "X-Chat-Id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "da8f8d98-221e-4a14-94e4-2435224a5eb4",
+                      "createdAt": "2025-11-05T12:50:43.995Z",
+                      "updatedAt": "2025-11-05T12:50:43.995Z",
+                      "type": "function",
+                      "function": {
+                        "name": "recover_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "stage"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "carry": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "endIso": {
+                                  "type": "string"
+                                },
+                                "startIso": {
+                                  "type": "string"
+                                },
+                                "timezone": {
+                                  "type": "string"
+                                }
+                              },
+                              "description": "Partial booking info if we had it (title, startIso, endIso, timezone)."
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Caller phone (E.164 if possible)"
+                            },
+                            "stage": {
+                              "enum": [
+                                "new",
+                                "confirm",
+                                "reschedule",
+                                "cancel"
+                              ],
+                              "type": "string",
+                              "description": "Where the flow dropped."
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "description": "Known Google Calendar event id, if any"
+                            }
+                          }
+                        },
+                        "description": "Call this if the call disconnects mid-flow. Pass what you know so the system can send the correct follow-up."
+                      },
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/recover",
+                        "headers": {
+                          "X-Chat-Id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "0110b0d0-50db-4594-b468-8646899301bc",
+                      "createdAt": "2025-10-04T05:42:12.841Z",
+                      "updatedAt": "2025-11-08T05:26:45.384Z",
+                      "type": "function",
+                      "function": {
+                        "name": "function_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "title",
+                            "startIso",
+                            "endIso",
+                            "timezone",
+                            "name",
+                            "phone",
+                            "service_type",
+                            "email",
+                            "confirm"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "Caller full name"
+                            },
+                            "email": {
+                              "type": "string",
+                              "default": "",
+                              "description": ""
+                            },
+                            "notes": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Extra context"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Caller phone in E.164 (e.g., +12145550123)"
+                            },
+                            "title": {
+                              "type": "string",
+                              "description": "Title of the appointment"
+                            },
+                            "endIso": {
+                              "type": "string",
+                              "default": "",
+                              "description": "End datetime in ISO 8601 (e.g., 2025-10-05T11:00:00-05:00)"
+                            },
+                            "confirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "default": "",
+                              "description": "User confirmation for the chosen slot; send \\\"yes\\\" when user explicitly confirms."
+                            },
+                            "startIso": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Start datetime in ISO 8601 (e.g., 2025-10-05T10:30:00-05:00)"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "America/Chicago",
+                              "description": "IANA timezone"
+                            },
+                            "attendees": {
+                              "type": "string",
+                              "description": "Comma-separated attendee emails (optional)"
+                            },
+                            "altConfirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "description": "Confirm alternative slot?"
+                            },
+                            "service_type": {
+                              "enum": [
+                                "general support",
+                                "maintenance",
+                                "consultation",
+                                "onsite",
+                                "emergency"
+                              ],
+                              "type": "string",
+                              "description": "Requested service category"
+                            }
+                          }
+                        },
+                        "description": "Send JSON with title, start, end, timezone, attendees, and notes.\nThe tool will respond with whether the appointment was booked, if more info is needed, or if no slot is available. When you call bookAppointment, Webhook returns JSON:\n\n{\"result\":\"booked|need_more_info|no_free_slot|error\",\n\"slot\":{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"},\n\"title\":\"<str>\",\"bookingId\":\"<id>\",\"calendarUrl\":\"<url>\",\n\"notes\":\"<str>\",\n\"alternatives\":[{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"}],\n\"reason\":\"<str>\"}\n\nHandle:\n- booked → confirm title/date/time; end.\n- need_more_info → ask only for fields named in reason.\n- no_free_slot → read 1–2 items from alternatives, ask user to pick, then call tool again with chosen slot.\n- error → apologize and suggest trying later."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/call",
+                        "headers": {
+                          "X-Chat-Id": "b58b1494-2d2a-482c-8383-96c9e3b5ff3f"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "recordingEnabled": false,
+                "firstMessage": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?",
+                "voicemailMessage": "Hello, this is Riley from Wellness Partners. I'm calling about your appointment. Please call us back at your earliest convenience so we can confirm your scheduling details.",
+                "endCallMessage": "Perfect! Your appointment has been scheduled. You'll receive a confirmation email shortly. Have a great day!",
+                "transcriber": {
+                  "model": "nova-2",
+                  "language": "en",
+                  "numerals": false,
+                  "provider": "deepgram",
+                  "endpointing": 300,
+                  "confidenceThreshold": 0.4
+                },
+                "clientMessages": [
+                  "conversation-update",
+                  "function-call",
+                  "hang",
+                  "model-output",
+                  "speech-update",
+                  "status-update",
+                  "transfer-update",
+                  "transcript",
+                  "tool-calls",
+                  "user-interrupted",
+                  "voice-input",
+                  "workflow.node.started"
+                ],
+                "hipaaEnabled": false,
+                "analysisPlan": {
+                  "minMessagesThreshold": 2
+                },
+                "backgroundDenoisingEnabled": false,
+                "artifactPlan": {
+                  "structuredOutputIds": [
+                    "714f8cf2-ed60-4a8f-acb9-524afaafab35"
+                  ]
+                },
+                "startSpeakingPlan": {
+                  "waitSeconds": 0.4,
+                  "transcriptionEndpointingPlan": {
+                    "onNumberSeconds": 0.5,
+                    "onPunctuationSeconds": 0.1,
+                    "onNoPunctuationSeconds": 1.5
+                  }
+                }
+              }
+            }
+          },
+          "webhookUrl": "https://polarmedia.app.n8n.cloud/webhook/vapi/cancel",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Cancel": {
+      "main": [
+        [
+          {
+            "node": "Get many events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many events": {
+      "main": [
+        [
+          {
+            "node": "code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Delete an event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete an event": {
+      "main": [
+        [
+          {
+            "node": "Code (OK)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (OK)": {
+      "main": [
+        [
+          {
+            "node": "Vapi Wrapper (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Vapi Wrapper (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vapi/cancel-ui": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi Wrapper (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "71ad79d0-5906-46b9-985c-3d577b82c8e7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "DbNI9pwp1sSREeTj",
+  "tags": []
+}

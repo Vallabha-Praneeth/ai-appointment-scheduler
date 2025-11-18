@@ -1,0 +1,148 @@
+{
+  "name": "Appointment Scheduling AI v.0.0.3 (Check Availability)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi/check-availability",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a0ea0203-f702-498c-9a14-2ea74e91ded2",
+      "name": "Webhook (Check Availability)",
+      "webhookId": "check-availability-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and normalize the availability check request\nconst root = $json || {};\nconst body = (root.body && typeof root.body === 'object') ? root.body : {};\nconst msg = (body.message && typeof body.message === 'object') ? body.message : {};\n\n// Get toolCallId for Vapi response wrapper\nconst callId = msg?.toolCalls?.[0]?.id || msg?.toolCallList?.[0]?.id || \"\";\n\n// Extract arguments\nlet args = msg?.toolCalls?.[0]?.function?.arguments ?? msg?.toolCallList?.[0]?.function?.arguments ?? {};\n\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch { args = {}; }\n}\n\n// Extract parameters with defaults\nconst timezone = args.timezone || \"America/Chicago\";\nconst duration = parseInt(args.duration) || 60; // minutes\nconst slotsCount = parseInt(args.slotsCount) || 5;\nconst serviceType = args.service_type || \"consultation\";\n\n// Calculate time range for calendar query (next 14 days)\nconst now = new Date();\nconst startFrom = args.startFrom ? new Date(args.startFrom) : now;\nconst endRange = new Date(startFrom);\nendRange.setDate(endRange.getDate() + 14);\n\n// Format as ISO strings\nconst startIso = startFrom.toISOString();\nconst endIso = endRange.toISOString();\n\nreturn [{\n  json: {\n    callId,\n    timezone,\n    duration,\n    slotsCount,\n    serviceType,\n    startFrom: startIso,\n    endRange: endIso\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "3aec5ec5-3f57-42f9-9eba-bd0e2e1db9a7",
+      "name": "Normalize Input"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "quantumops9@gmail.com"
+        },
+        "limit": 500,
+        "options": {
+          "timeZone": "={{ $json.timezone }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        0
+      ],
+      "id": "58e09d44-9c93-4033-b171-d9ed18de0dd4",
+      "name": "Get Calendar Events",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "0yByGfoje3gvnxgr",
+          "name": "Google Calendar account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate next N available slots\nconst params = $items()[0].json;\nconst events = $input.all().slice(1).map(i => i.json); // Skip first item (params)\n\nconst timezone = params.timezone;\nconst duration = params.duration;\nconst slotsCount = params.slotsCount;\nconst startFrom = new Date(params.startFrom);\n\n// Business hours: 10:00 - 18:00\nconst OPEN_HOUR = 10;\nconst CLOSE_HOUR = 18;\nconst SLOT_INTERVAL = 30; // Check every 30 minutes\n\n// Helper: Get date in specific timezone\nfunction getLocalDateTime(date, tz) {\n  const formatter = new Intl.DateTimeFormat('en-US', {\n    timeZone: tz,\n    year: 'numeric',\n    month: '2-digit',\n    day: '2-digit',\n    hour: '2-digit',\n    minute: '2-digit',\n    second: '2-digit',\n    hour12: false\n  });\n  \n  const parts = formatter.formatToParts(date);\n  const getValue = (type) => parts.find(p => p.type === type)?.value;\n  \n  return {\n    year: parseInt(getValue('year')),\n    month: parseInt(getValue('month')),\n    day: parseInt(getValue('day')),\n    hour: parseInt(getValue('hour')),\n    minute: parseInt(getValue('minute'))\n  };\n}\n\n// Helper: Check if time is within business hours\nfunction isBusinessHours(date, tz) {\n  const local = getLocalDateTime(date, tz);\n  return local.hour >= OPEN_HOUR && local.hour < CLOSE_HOUR;\n}\n\n// Helper: Check if slot overlaps with any existing event\nfunction hasConflict(slotStart, slotEnd, events) {\n  return events.some(event => {\n    // Skip placeholder/test events\n    const summary = (event.summary || \"\").toLowerCase();\n    if (summary.includes(\"test\") || summary.includes(\"placeholder\")) {\n      return false;\n    }\n    \n    const eventStart = new Date(event.start?.dateTime || event.start);\n    const eventEnd = new Date(event.end?.dateTime || event.end);\n    \n    // Check for overlap\n    return slotStart < eventEnd && slotEnd > eventStart;\n  });\n}\n\n// Helper: Format date for display\nfunction formatSlot(date, tz) {\n  const formatter = new Intl.DateTimeFormat('en-US', {\n    timeZone: tz,\n    weekday: 'short',\n    month: 'short',\n    day: 'numeric',\n    hour: 'numeric',\n    minute: '2-digit',\n    hour12: true\n  });\n  return formatter.format(date);\n}\n\n// Generate available slots\nconst availableSlots = [];\nlet currentCheck = new Date(startFrom);\n\n// Make sure we start at the next business hour if needed\nconst currentLocal = getLocalDateTime(currentCheck, timezone);\nif (currentLocal.hour < OPEN_HOUR) {\n  currentCheck.setHours(OPEN_HOUR, 0, 0, 0);\n} else if (currentLocal.hour >= CLOSE_HOUR) {\n  // Move to next day\n  currentCheck.setDate(currentCheck.getDate() + 1);\n  currentCheck.setHours(OPEN_HOUR, 0, 0, 0);\n}\n\n// Round to next 30-minute interval\nconst minutes = currentCheck.getMinutes();\nif (minutes % SLOT_INTERVAL !== 0) {\n  currentCheck.setMinutes(Math.ceil(minutes / SLOT_INTERVAL) * SLOT_INTERVAL, 0, 0);\n}\n\nconst maxDays = 14;\nconst endDate = new Date(startFrom);\nendDate.setDate(endDate.getDate() + maxDays);\n\nwhile (availableSlots.length < slotsCount && currentCheck < endDate) {\n  const slotEnd = new Date(currentCheck);\n  slotEnd.setMinutes(slotEnd.getMinutes() + duration);\n  \n  // Check if slot end is still within business hours\n  const slotEndLocal = getLocalDateTime(slotEnd, timezone);\n  const withinBusinessHours = isBusinessHours(currentCheck, timezone) && \n                               (slotEndLocal.hour < CLOSE_HOUR || \n                                (slotEndLocal.hour === CLOSE_HOUR && slotEndLocal.minute === 0));\n  \n  if (withinBusinessHours && !hasConflict(currentCheck, slotEnd, events)) {\n    availableSlots.push({\n      start: currentCheck.toISOString(),\n      end: slotEnd.toISOString(),\n      timezone: timezone,\n      formatted: formatSlot(currentCheck, timezone),\n      duration: duration\n    });\n  }\n  \n  // Move to next slot\n  currentCheck = new Date(currentCheck);\n  currentCheck.setMinutes(currentCheck.getMinutes() + SLOT_INTERVAL);\n  \n  // If we're past business hours, move to next day\n  const checkLocal = getLocalDateTime(currentCheck, timezone);\n  if (checkLocal.hour >= CLOSE_HOUR) {\n    currentCheck.setDate(currentCheck.getDate() + 1);\n    currentCheck.setHours(OPEN_HOUR, 0, 0, 0);\n  }\n}\n\nreturn [{\n  json: {\n    callId: params.callId,\n    result: availableSlots.length > 0 ? \"success\" : \"no_slots_found\",\n    availableSlots: availableSlots,\n    slotsFound: availableSlots.length,\n    slotsRequested: slotsCount,\n    timezone: timezone,\n    duration: duration,\n    message: availableSlots.length > 0 \n      ? `Found ${availableSlots.length} available slot(s).`\n      : \"No available slots found in the next 14 days.\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "856df64e-cc3a-4b56-a029-a90d50a9820f",
+      "name": "Calculate Available Slots"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"results\": [{ \"toolCallId\": $json.callId, \"result\": JSON.stringify($json) }] } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        880,
+        0
+      ],
+      "id": "35654364-9511-4001-91ad-ba8c0bce6799",
+      "name": "Respond with Slots"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook (Check Availability)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Get Calendar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Events": {
+      "main": [
+        [
+          {
+            "node": "Calculate Available Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Available Slots": {
+      "main": [
+        [
+          {
+            "node": "Respond with Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "632fb9f1-af37-4bcc-92ed-c92314e5049e",
+  "meta": {
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "NpAql8ZatvAJ5nTA",
+  "tags": []
+}

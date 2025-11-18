@@ -1,0 +1,1678 @@
+{
+  "name": "Appointment Scheduling AI v.0.0.3 (Group Booking)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi/group-booking",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1536,
+        240
+      ],
+      "id": "eefbc8b8-61e7-4501-8da9-b1ce9151355a",
+      "name": "Webhook (Group Booking)",
+      "webhookId": "group-booking-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and normalize the group booking request\nconst root = $json || {};\nconst body = (root.body && typeof root.body === 'object') ? root.body : {};\nconst msg = (body.message && typeof body.message === 'object') ? body.message : {};\n\n// Get toolCallId for Vapi response wrapper\nconst callId = msg?.toolCalls?.[0]?.id || msg?.toolCallList?.[0]?.id || \"\";\n\n// Extract arguments\nlet args = msg?.toolCalls?.[0]?.function?.arguments ?? msg?.toolCallList?.[0]?.function?.arguments ?? {};\n\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch { args = {}; }\n}\n\n// Normalize phone function\nfunction normPhone(raw) {\n  const s = String(raw || \"\");\n  const digits = (s.match(/\\d/g) || []).join(\"\");\n  if (digits.length < 10) return { e164: \"\", valid: false };\n  \n  // Assume US numbers if no country code\n  const e164 = digits.length === 10 ? \"+1\" + digits : \n               (digits.startsWith(\"1\") && digits.length === 11) ? \"+\" + digits :\n               \"+\" + digits;\n  \n  return { e164, valid: true };\n}\n\n// Extract booking type\nconst bookingType = args.bookingType || \"shared\";\nconst confirm = args.confirm || \"no\";\n\nlet normalized = {\n  callId,\n  bookingType,\n  confirm,\n  bookings: []\n};\n\n// Process based on booking type\nif (bookingType === \"shared\" || bookingType === \"individual_same_slot\") {\n  const shared = args.sharedBooking || {};\n  const attendees = Array.isArray(shared.attendees) ? shared.attendees : [];\n  \n  if (bookingType === \"shared\") {\n    // One event with all attendees\n    normalized.bookings.push({\n      title: shared.title || \"Group Appointment\",\n      startIso: shared.startIso,\n      endIso: shared.endIso,\n      timezone: shared.timezone || \"America/Chicago\",\n      service_type: shared.service_type,\n      notes: shared.notes || \"\",\n      attendees: attendees.map(a => ({\n        name: a.name,\n        phone: normPhone(a.phone).e164,\n        email: a.email || \"\"\n      })),\n      isShared: true\n    });\n  } else {\n    // individual_same_slot: separate events for each person\n    attendees.forEach(attendee => {\n      normalized.bookings.push({\n        title: shared.title || \"Appointment\",\n        startIso: shared.startIso,\n        endIso: shared.endIso,\n        timezone: shared.timezone || \"America/Chicago\",\n        service_type: shared.service_type,\n        notes: shared.notes || \"\",\n        attendees: [{\n          name: attendee.name,\n          phone: normPhone(attendee.phone).e164,\n          email: attendee.email || \"\"\n        }],\n        isShared: false\n      });\n    });\n  }\n} else if (bookingType === \"separate\") {\n  // Multiple different time slots\n  const separate = Array.isArray(args.separateBookings) ? args.separateBookings : [];\n  \n  separate.forEach(booking => {\n    normalized.bookings.push({\n      title: booking.title || \"Appointment\",\n      startIso: booking.startIso,\n      endIso: booking.endIso,\n      timezone: booking.timezone || \"America/Chicago\",\n      service_type: booking.service_type,\n      notes: booking.notes || \"\",\n      attendees: [{\n        name: booking.name,\n        phone: normPhone(booking.phone).e164,\n        email: booking.email || \"\"\n      }],\n      isShared: false\n    });\n  });\n}\n\nreturn [{ json: normalized }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1328,
+        240
+      ],
+      "id": "51df5c75-adb6-4340-9f5c-81f1537fe021",
+      "name": "Normalize Group Booking"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "confirm-check",
+              "leftValue": "={{ $json.confirm }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1104,
+        240
+      ],
+      "id": "89cb6a28-f9cf-4d98-a8ee-ed579673684b",
+      "name": "Confirmed?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"results\": [{ \"toolCallId\": $json.callId, \"result\": JSON.stringify({ \"result\": \"need_confirmation\", \"message\": \"Please confirm you want to book \" + $json.bookings.length + \" appointment(s). Say 'yes' to proceed.\", \"bookingCount\": $json.bookings.length }) }] } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -880,
+        528
+      ],
+      "id": "37aa11e6-2109-4345-871a-2f509f61ab0f",
+      "name": "Need Confirmation"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split bookings into separate items for processing\n  const bookings = $json.bookings || [];\n  const callId = $json.callId;\n\n  // Helper function to convert past dates to future\n  function correctDateToFuture(isoString) {\n    if (!isoString) return isoString;\n\n    const now = new Date();\n    const bookingDate = new Date(isoString);\n\n    // If date is in the past, move it to the current/next year\n    if (bookingDate < now) {\n      const currentYear = now.getFullYear();\n      const bookingYear = bookingDate.getFullYear();\n      const yearDiff = currentYear - bookingYear;\n\n      // Replace the year in the ISO string\n      const correctedIso = isoString.replace(\n        /^\\d{4}/,\n        currentYear.toString()\n      );\n\n      // Check if it's still in the past (maybe same month/day already passed)\n      const correctedDate = new Date(correctedIso);\n      if (correctedDate < now) {\n        // Move to next year\n        return correctedIso.replace(\n          /^\\d{4}/,\n          (currentYear + 1).toString()\n        );\n      }\n\n      return correctedIso;\n    }\n\n    return isoString;\n  }\n\n  return bookings.map((booking, index) => ({\n    json: {\n      ...booking,\n      startIso: correctDateToFuture(booking.startIso),\n      endIso: correctDateToFuture(booking.endIso),\n      callId,\n      bookingIndex: index,\n      totalBookings: bookings.length\n    }\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        128
+      ],
+      "id": "1adac585-6d84-4966-a260-5d94d807456b",
+      "name": "Split into Items"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "quantumops9@gmail.com"
+        },
+        "timeMin": "={{$json.startIso}}",
+        "timeMax": "={{$json.endIso}}",
+        "options": {
+          "timeZone": "={{ $json.timezone }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -656,
+        128
+      ],
+      "id": "cff8d005-74b0-486a-b5f7-f13ac89b9d20",
+      "name": "Check Availability",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "q8VNLUCeX67n7Bbs",
+          "name": "Qops"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get booking data from first input (Split into Items)\n  const allItems = $input.all();\n  const booking = allItems[0]?.json || {};\n\n  // Get calendar events from remaining items\n  const events = allItems.slice(1).filter(item => item.json &&\n  Object.keys(item.json).length > 0);\n\n  // Safety check\n  if (!booking.startIso || !booking.endIso) {\n    return [{\n      json: {\n        available: false,\n        reason: \"Missing booking time information\"\n      }\n    }];\n  }\n\n  const startTime = new Date(booking.startIso);\n  const endTime = new Date(booking.endIso);\n\n  // Extract hour from ISO string to preserve timezone\n  const hourMatch = booking.startIso.match(/T(\\d{2}):/);\n  const hour = hourMatch ? parseInt(hourMatch[1], 10) : 0;\n\n  // Check business hours (10 AM - 6 PM)\n  const isBusinessHours = hour >= 10 && hour < 18;\n\n  // Check for conflicts\n  let hasConflict = false;\n  let conflictReason = \"\";\n\n  for (const event of events) {\n    const eventData = event.json;\n    if (!eventData.start) continue; // Skip empty items\n\n    const eventStart = new Date(eventData.start?.dateTime ||\n  eventData.start?.date);\n    const eventEnd = new Date(eventData.end?.dateTime ||\n  eventData.end?.date);\n\n    // Check overlap\n    if (startTime < eventEnd && endTime > eventStart) {\n      hasConflict = true;\n      conflictReason = `Conflicts with existing event: ${eventData.summary \n  || 'Existing appointment'}`;\n      break;\n    }\n  }\n\n  return [{\n    json: {\n      ...booking,\n      available: isBusinessHours && !hasConflict,\n      reason: !isBusinessHours ? \"Outside business hours (10 AM - 6 PM)\" :\n  (conflictReason || \"Available\")\n    }\n  }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        144
+      ],
+      "id": "66e0433e-a7bc-489e-a202-0df66cc07b33",
+      "name": "Validate Availability"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "available-check",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -16,
+        144
+      ],
+      "id": "d8fca79d-4b59-4cdc-84bf-abda78fe11c0",
+      "name": "Is Available?"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "quantumops9@gmail.com"
+        },
+        "start": "={{ $json.startIso }}",
+        "end": "={{ $json.endIso }}",
+        "additionalFields": {
+          "attendees": [],
+          "description": "={{ $json.notes + \"\\n\\nAttendees:\\n\" + $json.attendees.map(a => `-\n  ${a.name} (Phone: ${a.phone}${a.email ? ', Email: ' + a.email :\n  ''})`).join('\\n') + \"\\n\\nService Type: \" + $json.service_type }}",
+          "summary": "={{ $json.title }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        208,
+        128
+      ],
+      "id": "b457ec71-ee46-4bef-864d-731ed5dcf34e",
+      "name": "Create Calendar Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "q8VNLUCeX67n7Bbs",
+          "name": "Qops"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": " // Mark booking as successful\n  const calendarEvent = $input.first().json;\n\n  // Get data from earlier in the flow (before calendar creation)\n  const allData = $input.all()[0].json;\n\n  return [{\n    json: {\n      ...calendarEvent,\n      result: \"booked\",\n      bookingId: calendarEvent.id,\n      calendarUrl: calendarEvent.htmlLink,\n      // These should already be in the data flow\n      title: allData.summary || allData.title || \"Booked\",\n      attendees: allData.attendees || [],\n      callId: allData.callId || \"\",\n      startIso: allData.startIso,\n      endIso: allData.endIso,\n      timezone: allData.timezone,\n      service_type: allData.service_type\n    }\n  }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        128
+      ],
+      "id": "c5929aa6-1722-43fe-9f60-8d2d7a12a799",
+      "name": "Mark as Booked"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mark as failed\nreturn [{\n  json: {\n    ...$json,\n    result: \"failed\",\n    bookingId: null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        384
+      ],
+      "id": "b68ef53c-100e-4798-b2d1-8dd0c5e8fcaa",
+      "name": "Mark as Failed"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all results\n  const allItems = $input.all();\n  const results = allItems.map(i => i.json).filter(r => r && typeof r ===\n  'object');\n\n  if (results.length === 0) {\n    return [{\n      json: {\n        results: [{\n          toolCallId: \"\",\n          result: JSON.stringify({\n            result: \"all_failed\",\n            message: \"No booking results to process\"\n          })\n        }]\n      }\n    }];\n  }\n\n  // Get callId - check multiple possible locations\n  const callId = results[0]?.callId ||\n                 results[0]?.json?.callId ||\n                 $node[\"Normalize Group Booking\"].json?.callId ||\n                 \"\";\n\n  const successful = results.filter(r => r.result === \"booked\" ||\n  r.available === true || r.id);\n  const failed = results.filter(r => r.result === \"failed\" || (r.available\n  === false && !r.id));\n\n  const response = {\n    result: failed.length === 0 ? \"all_booked\" :\n            successful.length === 0 ? \"all_failed\" : \"partial_success\",\n    totalRequested: results.length,\n    successCount: successful.length,\n    failureCount: failed.length,\n    bookings: results.map(r => ({\n      title: r.title || r.summary || \"Untitled\",\n      start: r.startIso || r.start?.dateTime || r.start,\n      end: r.endIso || r.end?.dateTime || r.end,\n      status: (r.result === \"booked\" || r.available === true || r.id) ?\n  \"booked\" : \"failed\",\n      bookingId: r.bookingId || r.id || null,\n      reason: r.reason || null,\n      attendees: Array.isArray(r.attendees) ? r.attendees.map(a => typeof a\n  === 'string' ? a : (a.name || a.email || '')) : []\n    })),\n    message: failed.length === 0\n      ? `Successfully booked ${successful.length} appointment(s).`\n      : successful.length === 0\n      ? `Could not book any appointments. Reasons: ${failed.map(f => \n  f.reason || 'Unknown').join('; ')}`\n      : `Booked ${successful.length} of ${results.length} appointments. \n  ${failed.length} failed.`\n  };\n\n  return [{\n    json: {\n      results: [{\n        toolCallId: callId,\n        result: JSON.stringify(response)\n      }]\n    }\n  }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        128
+      ],
+      "id": "236b5160-515e-4799-9331-9a525ad26208",
+      "name": "Aggregate Results"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1056,
+        128
+      ],
+      "id": "301fd5f4-a886-4fc7-af95-190727417bb1",
+      "name": "Respond to Vapi"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -448,
+        144
+      ],
+      "id": "99dc7051-de6a-44b8-bd23-9917a8ef75d4",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        432,
+        128
+      ],
+      "id": "61dbeae2-8e86-45d5-8e74-7fffc35a9332",
+      "name": "Merge1"
+    }
+  ],
+  "pinData": {
+    "Webhook (Group Booking)": [
+      {
+        "json": {
+          "headers": {
+            "host": "polarmedia.app.n8n.cloud",
+            "user-agent": "axios/1.8.3",
+            "content-length": "35310",
+            "accept": "application/json, text/plain, */*",
+            "accept-encoding": "gzip, br",
+            "baggage": "sentry-environment=production,sentry-public_key=fac6f282c765ce50b18c3fa0305f8a8b,sentry-trace_id=b6f6b2d28d4d4fe7ad63c224dea8db25",
+            "cdn-loop": "cloudflare; loops=1; subreqs=1",
+            "cf-connecting-ip": "167.150.225.93",
+            "cf-ew-via": "15",
+            "cf-ipcountry": "US",
+            "cf-ray": "99d5fdabd7a98e63-PDX",
+            "cf-visitor": "{\"scheme\":\"https\"}",
+            "cf-worker": "n8n.cloud",
+            "content-type": "application/json",
+            "cookie": "callId=",
+            "sentry-trace": "b6f6b2d28d4d4fe7ad63c224dea8db25-87e102f615729840",
+            "traceparent": "00-7b786e1eba2ba781a664bcd45ee6d8f6-4595cc85bd74ce62-01",
+            "x-chat-id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+            "x-forwarded-for": "167.150.225.93, 172.68.174.122",
+            "x-forwarded-host": "polarmedia.app.n8n.cloud",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "traefik-prod-users-gwc-18-7959cfc789-rqqrl",
+            "x-is-trusted": "yes",
+            "x-real-ip": "167.150.225.93",
+            "x-vapi-secret": ""
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "message": {
+              "timestamp": 1762950104926,
+              "type": "tool-calls",
+              "toolCalls": [
+                {
+                  "id": "call_lo1JxUvhwqoGrExgS5HJaV4K",
+                  "type": "function",
+                  "function": {
+                    "name": "group_booking_tool",
+                    "arguments": {
+                      "confirm": "yes",
+                      "bookingType": "shared",
+                      "sharedBooking": {
+                        "title": "General Consultation",
+                        "startIso": "2025-11-13T12:00:00-06:00",
+                        "endIso": "2025-11-13T12:30:00-06:00",
+                        "timezone": "America/Chicago",
+                        "service_type": "consultation",
+                        "attendees": [
+                          {
+                            "name": "Ken",
+                            "email": "k@gmail.com",
+                            "phone": "+1234567890"
+                          },
+                          {
+                            "name": "Den",
+                            "email": "d@gmail.com",
+                            "phone": "+9949903496"
+                          },
+                          {
+                            "name": "Jen",
+                            "email": "j@gmail.com",
+                            "phone": "+9292929292"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "isPrecededByText": true
+                }
+              ],
+              "toolCallList": [
+                {
+                  "id": "call_lo1JxUvhwqoGrExgS5HJaV4K",
+                  "type": "function",
+                  "function": {
+                    "name": "group_booking_tool",
+                    "arguments": {
+                      "confirm": "yes",
+                      "bookingType": "shared",
+                      "sharedBooking": {
+                        "title": "General Consultation",
+                        "startIso": "2025-11-13T12:00:00-06:00",
+                        "endIso": "2025-11-13T12:30:00-06:00",
+                        "timezone": "America/Chicago",
+                        "service_type": "consultation",
+                        "attendees": [
+                          {
+                            "name": "Ken",
+                            "email": "k@gmail.com",
+                            "phone": "+1234567890"
+                          },
+                          {
+                            "name": "Den",
+                            "email": "d@gmail.com",
+                            "phone": "+9949903496"
+                          },
+                          {
+                            "name": "Jen",
+                            "email": "j@gmail.com",
+                            "phone": "+9292929292"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "isPrecededByText": true
+                }
+              ],
+              "toolWithToolCallList": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "group_booking_tool",
+                    "strict": true,
+                    "parameters": {
+                      "type": "object",
+                      "required": [
+                        "bookingType",
+                        "confirm"
+                      ],
+                      "properties": {
+                        "confirm": {
+                          "enum": [
+                            "yes",
+                            "no"
+                          ],
+                          "type": "string",
+                          "description": "Must be yes to proceed with booking. Ask user to confirm."
+                        },
+                        "bookingType": {
+                          "enum": [
+                            "shared",
+                            "separate",
+                            "individual_same_slot"
+                          ],
+                          "type": "string",
+                          "description": "SHARED = one event with all attendees together. SEPARATE = different times for each person. INDIVIDUAL_SAME_SLOT = same time but individual events for each person."
+                        },
+                        "sharedBooking": {
+                          "type": "object",
+                          "required": [
+                            "title",
+                            "startIso",
+                            "endIso",
+                            "timezone",
+                            "service_type",
+                            "attendees"
+                          ],
+                          "properties": {
+                            "notes": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Additional notes or special requests"
+                            },
+                            "title": {
+                              "type": "string",
+                              "description": "Title of the appointment"
+                            },
+                            "endIso": {
+                              "type": "string",
+                              "description": "End time in ISO 8601 format"
+                            },
+                            "startIso": {
+                              "type": "string",
+                              "description": "Start time in ISO 8601 format"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "America/Chicago",
+                              "description": "IANA timezone"
+                            },
+                            "attendees": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "name",
+                                  "phone"
+                                ],
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "description": "Full name of attendee"
+                                  },
+                                  "email": {
+                                    "type": "string",
+                                    "default": "",
+                                    "description": "Optional email address"
+                                  },
+                                  "phone": {
+                                    "type": "string",
+                                    "description": "Phone in E.164 format"
+                                  }
+                                }
+                              },
+                              "maxItems": 10,
+                              "minItems": 2,
+                              "description": "List of all people for this group booking"
+                            },
+                            "service_type": {
+                              "enum": [
+                                "general support",
+                                "maintenance",
+                                "consultation",
+                                "onsite",
+                                "emergency"
+                              ],
+                              "type": "string",
+                              "description": "Type of service being requested"
+                            }
+                          },
+                          "description": "Required when bookingType is shared or individual_same_slot"
+                        },
+                        "separateBookings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "title",
+                              "startIso",
+                              "endIso",
+                              "timezone",
+                              "name",
+                              "phone",
+                              "service_type"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "Name of the person for this appointment"
+                              },
+                              "email": {
+                                "type": "string",
+                                "default": "",
+                                "description": "Optional email"
+                              },
+                              "notes": {
+                                "type": "string",
+                                "default": ""
+                              },
+                              "phone": {
+                                "type": "string",
+                                "description": "Phone in E.164 format"
+                              },
+                              "title": {
+                                "type": "string",
+                                "description": "Title of this specific appointment"
+                              },
+                              "endIso": {
+                                "type": "string",
+                                "description": "End time in ISO 8601 format"
+                              },
+                              "startIso": {
+                                "type": "string",
+                                "description": "Start time in ISO 8601 format"
+                              },
+                              "timezone": {
+                                "type": "string",
+                                "default": "America/Chicago",
+                                "description": "IANA timezone"
+                              },
+                              "service_type": {
+                                "enum": [
+                                  "general support",
+                                  "maintenance",
+                                  "consultation",
+                                  "onsite",
+                                  "emergency"
+                                ],
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "maxItems": 10,
+                          "minItems": 2,
+                          "description": "Required when bookingType is separate. Each item is a different appointment."
+                        }
+                      }
+                    },
+                    "description": "Book appointments for multiple people. Supports three modes: (1) SHARED - One appointment with multiple attendees like team meeting. (2) INDIVIDUAL_SAME_SLOT - Same time slot but separate calendar events for each person like group training. (3) SEPARATE - Different time slots for different people. Before calling collect all attendee names and phone numbers, confirm the booking type with the user, verify the time slots are within business hours 10 AM to 6 PM, and get explicit yes confirmation before proceeding."
+                  },
+                  "server": {
+                    "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/group-booking",
+                    "headers": {
+                      "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+                      "Content-Type": "application/json"
+                    }
+                  },
+                  "messages": [
+                    {
+                      "type": "request-start",
+                      "contents": [],
+                      "conditions": [],
+                      "blocking": false
+                    }
+                  ],
+                  "toolCall": {
+                    "id": "call_lo1JxUvhwqoGrExgS5HJaV4K",
+                    "type": "function",
+                    "function": {
+                      "name": "group_booking_tool",
+                      "arguments": {
+                        "confirm": "yes",
+                        "bookingType": "shared",
+                        "sharedBooking": {
+                          "title": "General Consultation",
+                          "startIso": "2025-11-13T12:00:00-06:00",
+                          "endIso": "2025-11-13T12:30:00-06:00",
+                          "timezone": "America/Chicago",
+                          "service_type": "consultation",
+                          "attendees": [
+                            {
+                              "name": "Ken",
+                              "email": "k@gmail.com",
+                              "phone": "+1234567890"
+                            },
+                            {
+                              "name": "Den",
+                              "email": "d@gmail.com",
+                              "phone": "+9949903496"
+                            },
+                            {
+                              "name": "Jen",
+                              "email": "j@gmail.com",
+                              "phone": "+9292929292"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "isPrecededByText": true
+                  }
+                }
+              ],
+              "artifact": {
+                "messages": [
+                  {
+                    "role": "system",
+                    "message": "[Identity]\nYou are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → ONLY for SINGLE PERSON appointments\n Requires: name, email, phone, title, service_type, startIso, endIso, timezone.\n When the caller confirms the slot, send: confirm: \"yes\".\n\n-group_booking_tool → REQUIRED for 2+ people (min 2, max 10)\n Three modes:\n • shared → one event with all attendees (team meetings)\n • separate → different times for different people\n • individual_same_slot → same time, separate events per person\n ALWAYS ask which mode before collecting details.\n\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n\n-reschedule_tool → reschedule with ...",
+                    "time": 1762950097744,
+                    "secondsFromStart": 0
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?",
+                    "time": 1762950097744,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "book an appointment",
+                    "time": 1762950097745,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Sure! Is this appointment for just you or for multiple people?",
+                    "time": 1762950097746,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "for a group of 3",
+                    "time": 1762950097747,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Got it! For the group of three, I need to know the type of booking you'd prefer. Here are the options:\n\n1) Everyone together in one event (shared booking).\n2) Individual sessions at different times (separate booking).\n3) Same time but separate calendar events for each person (individual same slot).\n\nWhich option works best for your group?",
+                    "time": 1762950097748,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "1",
+                    "time": 1762950097749,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Great! We'll book one event for everyone together. \n\nCan you tell me the date and time that works for the group? Also, what type of service is this for—general support, maintenance, consultation, onsite, or emergency?",
+                    "time": 1762950097750,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "tomorrow at 12:00 in the morning, for general consultation",
+                    "time": 1762950097751,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Just to confirm, you mean tomorrow at 12:00 PM (noon), correct?",
+                    "time": 1762950097752,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "yes",
+                    "time": 1762950097753,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Perfect! Now, I'll need the names and phone numbers of all three attendees. Could you provide them one at a time? If you'd like, you can also share their email addresses (optional).",
+                    "time": 1762950097754,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "ken, k@gmail.com, number: 1234567890, den, d@gmail.com, number: 9949903496, Jen, j@gmail.com, number: 9292929292",
+                    "time": 1762950097755,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "bot",
+                    "message": "Thank you! Let me confirm the details:\n\n- Date and time: Tomorrow, November 13, 2025, at 12:00 PM (noon), America/Chicago timezone.\n- Service type: General consultation.\n- Attendees:\n  1. Ken (k@gmail.com, +1234567890)\n  2. Den (d@gmail.com, +9949903496)\n  3. Jen (j@gmail.com, +9292929292)\n\nIs everything correct?",
+                    "time": 1762950097756,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "role": "user",
+                    "message": "yes",
+                    "time": 1762950097757,
+                    "secondsFromStart": 0,
+                    "endTime": 1762950097744
+                  },
+                  {
+                    "toolCalls": [
+                      {
+                        "id": "call_MWGkUZnlveFAagG0JUgB92ZP",
+                        "type": "function",
+                        "function": {
+                          "name": "group_booking_tool",
+                          "arguments": "{\n  \"confirm\": \"yes\",\n  \"bookingType\": \"shared\",\n  \"sharedBooking\": {\n    \"title\": \"General Consultation\",\n    \"startIso\": \"2025-11-13T12:00:00-06:00\",\n    \"endIso\": \"2025-11-13T12:30:00-06:00\",\n    \"timezone\": \"America/Chicago\",\n    \"service_type\": \"consultation\",\n    \"attendees\": [\n      {\n        \"name\": \"Ken\",\n        \"email\": \"k@gmail.com\",\n        \"phone\": \"+1234567890\"\n      },\n      {\n        \"name\": \"Den\",\n        \"email\": \"d@gmail.com\",\n        \"phone\": \"+9949903496\"\n      },\n      {\n        \"name\": \"Jen\",\n        \"email\": \"j@gmail.com\",\n        \"phone\": \"+9292929292\"\n      }\n    ]\n  }\n}"
+                        }
+                      }
+                    ],
+                    "role": "tool_calls",
+                    "message": "",
+                    "time": 1762950099133,
+                    "secondsFromStart": 1.389
+                  },
+                  {
+                    "role": "tool_call_result",
+                    "time": 1762950102562,
+                    "secondsFromStart": 4.818,
+                    "name": "group_booking_tool",
+                    "result": "No result returned for call_MWGkUZnlveFAagG0JUgB92ZP. If this is unexpected, see troubleshooting tips at https://docs.vapi.ai/tools/custom-tools-troubleshooting#no-result-returned-error.",
+                    "metadata": {},
+                    "toolCallId": "call_MWGkUZnlveFAagG0JUgB92ZP"
+                  },
+                  {
+                    "toolCalls": [
+                      {
+                        "id": "call_lo1JxUvhwqoGrExgS5HJaV4K",
+                        "type": "function",
+                        "function": {
+                          "name": "group_booking_tool",
+                          "arguments": "{\n  \"confirm\": \"yes\",\n  \"bookingType\": \"shared\",\n  \"sharedBooking\": {\n    \"title\": \"General Consultation\",\n    \"startIso\": \"2025-11-13T12:00:00-06:00\",\n    \"endIso\": \"2025-11-13T12:30:00-06:00\",\n    \"timezone\": \"America/Chicago\",\n    \"service_type\": \"consultation\",\n    \"attendees\": [\n      {\n        \"name\": \"Ken\",\n        \"email\": \"k@gmail.com\",\n        \"phone\": \"+1234567890\"\n      },\n      {\n        \"name\": \"Den\",\n        \"email\": \"d@gmail.com\",\n        \"phone\": \"+9949903496\"\n      },\n      {\n        \"name\": \"Jen\",\n        \"email\": \"j@gmail.com\",\n        \"phone\": \"+9292929292\"\n      }\n    ]\n  }\n}"
+                        }
+                      }
+                    ],
+                    "role": "tool_calls",
+                    "message": "",
+                    "time": 1762950104919,
+                    "secondsFromStart": 7.175
+                  },
+                  {
+                    "role": "bot",
+                    "message": "It seems there was an issue booking the appointment. Let me try again or suggest an alternative time. Please hold on for a moment.",
+                    "time": 1762950097744,
+                    "endTime": 7178,
+                    "secondsFromStart": 7.178
+                  }
+                ],
+                "messagesOpenAIFormatted": [
+                  {
+                    "role": "system",
+                    "content": "[Identity]\nYou are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → ONLY for SINGLE PERSON appointments\n Requires: name, email, phone, title, service_type, startIso, endIso, timezone.\n When the caller confirms the slot, send: confirm: \"yes\".\n\n-group_booking_tool → REQUIRED for 2+ people (min 2, max 10)\n Three modes:\n • shared → one event with all attendees (team meetings)\n • separate → different times for different people\n • individual_same_slot → same time, separate events per person\n ALWAYS ask which mode before collecting details.\n\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n\n-reschedule_tool → reschedule with ..."
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today? It seems there was an issue booking the appointment. Let me try again or suggest an alternative time. Please hold on for a moment."
+                  },
+                  {
+                    "role": "user",
+                    "content": "book an appointment"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Sure! Is this appointment for just you or for multiple people?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "for a group of 3"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Got it! For the group of three, I need to know the type of booking you'd prefer. Here are the options:\n\n1) Everyone together in one event (shared booking).\n2) Individual sessions at different times (separate booking).\n3) Same time but separate calendar events for each person (individual same slot).\n\nWhich option works best for your group?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "1"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Great! We'll book one event for everyone together. \n\nCan you tell me the date and time that works for the group? Also, what type of service is this for—general support, maintenance, consultation, onsite, or emergency?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "tomorrow at 12:00 in the morning, for general consultation"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Just to confirm, you mean tomorrow at 12:00 PM (noon), correct?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "yes"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Perfect! Now, I'll need the names and phone numbers of all three attendees. Could you provide them one at a time? If you'd like, you can also share their email addresses (optional)."
+                  },
+                  {
+                    "role": "user",
+                    "content": "ken, k@gmail.com, number: 1234567890, den, d@gmail.com, number: 9949903496, Jen, j@gmail.com, number: 9292929292"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "Thank you! Let me confirm the details:\n\n- Date and time: Tomorrow, November 13, 2025, at 12:00 PM (noon), America/Chicago timezone.\n- Service type: General consultation.\n- Attendees:\n  1. Ken (k@gmail.com, +1234567890)\n  2. Den (d@gmail.com, +9949903496)\n  3. Jen (j@gmail.com, +9292929292)\n\nIs everything correct?"
+                  },
+                  {
+                    "role": "user",
+                    "content": "yes"
+                  },
+                  {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_MWGkUZnlveFAagG0JUgB92ZP",
+                        "type": "function",
+                        "function": {
+                          "name": "group_booking_tool",
+                          "arguments": "{\n  \"confirm\": \"yes\",\n  \"bookingType\": \"shared\",\n  \"sharedBooking\": {\n    \"title\": \"General Consultation\",\n    \"startIso\": \"2025-11-13T12:00:00-06:00\",\n    \"endIso\": \"2025-11-13T12:30:00-06:00\",\n    \"timezone\": \"America/Chicago\",\n    \"service_type\": \"consultation\",\n    \"attendees\": [\n      {\n        \"name\": \"Ken\",\n        \"email\": \"k@gmail.com\",\n        \"phone\": \"+1234567890\"\n      },\n      {\n        \"name\": \"Den\",\n        \"email\": \"d@gmail.com\",\n        \"phone\": \"+9949903496\"\n      },\n      {\n        \"name\": \"Jen\",\n        \"email\": \"j@gmail.com\",\n        \"phone\": \"+9292929292\"\n      }\n    ]\n  }\n}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_MWGkUZnlveFAagG0JUgB92ZP",
+                    "content": "No result returned for call_MWGkUZnlveFAagG0JUgB92ZP. If this is unexpected, see troubleshooting tips at https://docs.vapi.ai/tools/custom-tools-troubleshooting#no-result-returned-error."
+                  },
+                  {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_lo1JxUvhwqoGrExgS5HJaV4K",
+                        "type": "function",
+                        "function": {
+                          "name": "group_booking_tool",
+                          "arguments": "{\n  \"confirm\": \"yes\",\n  \"bookingType\": \"shared\",\n  \"sharedBooking\": {\n    \"title\": \"General Consultation\",\n    \"startIso\": \"2025-11-13T12:00:00-06:00\",\n    \"endIso\": \"2025-11-13T12:30:00-06:00\",\n    \"timezone\": \"America/Chicago\",\n    \"service_type\": \"consultation\",\n    \"attendees\": [\n      {\n        \"name\": \"Ken\",\n        \"email\": \"k@gmail.com\",\n        \"phone\": \"+1234567890\"\n      },\n      {\n        \"name\": \"Den\",\n        \"email\": \"d@gmail.com\",\n        \"phone\": \"+9949903496\"\n      },\n      {\n        \"name\": \"Jen\",\n        \"email\": \"j@gmail.com\",\n        \"phone\": \"+9292929292\"\n      }\n    ]\n  }\n}"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "role": "tool",
+                    "tool_call_id": "call_lo1JxUvhwqoGrExgS5HJaV4K",
+                    "content": "Tool Result Still Pending But Proceed Further If Possible."
+                  }
+                ]
+              },
+              "chat": {
+                "id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+                "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                "createdAt": "2025-09-19T04:19:36.443Z",
+                "updatedAt": "2025-11-12T05:33:32.943Z"
+              },
+              "assistant": {
+                "id": "cda9d127-ac08-45d3-93d7-3d18ad9570fc",
+                "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                "name": "appointment_assistance",
+                "voice": {
+                  "voiceId": "Elliot",
+                  "provider": "vapi"
+                },
+                "createdAt": "2025-09-19T07:58:36.229Z",
+                "updatedAt": "2025-11-12T11:51:40.983Z",
+                "model": {
+                  "model": "gpt-4o",
+                  "toolIds": [
+                    "e3e93618-65cc-430e-96a1-99e96c97a6ab",
+                    "1de0d2dd-c744-4607-8bff-bdef102267f5",
+                    "90091906-a3a3-43e9-86b4-1ec9d70aeb4e",
+                    "da8f8d98-221e-4a14-94e4-2435224a5eb4",
+                    "0110b0d0-50db-4594-b468-8646899301bc",
+                    "96fd301f-2dbe-47da-8101-bf3ddf379a5a"
+                  ],
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": "[Identity]\nYou are Alex, a friendly, efficient scheduling assistant for QuantumOps IT Solutions. You handle bookings, confirmations, cancellations, and rescheduling. Speak naturally, one question at a time. Never read long booking IDs aloud.\n\n[Core Tools]\n-function_tool → ONLY for SINGLE PERSON appointments\n Requires: name, email, phone, title, service_type, startIso, endIso, timezone.\n When the caller confirms the slot, send: confirm: \"yes\".\n\n-group_booking_tool → REQUIRED for 2+ people (min 2, max 10)\n Three modes:\n • shared → one event with all attendees (team meetings)\n • separate → different times for different people\n • individual_same_slot → same time, separate events per person\n ALWAYS ask which mode before collecting details.\n\n-lookup_tool → find appointments by phone or email (or bookingId if given).\n\n-cancel_tool → cancel with { \"bookingId\": \"<id>\", \"confirm\": \"yes\" } (only after a successful lookup or if the caller provides a bookingId).\n\n-reschedule_tool → reschedule with { \"bookingId\": \"<id>\", \"newStartIso\": \"<ISO>\", \"newEndIso\": \"<ISO>\", \"timezone\": \"<IANA>\" }.\n\n-recover_tool → on disconnect or >10s silence, call with { stage, phone?, bookingId?, carry? }, then end the call.\n\n[Opening]\n\"Thanks for reaching QuantumOps IT Solutions. I'm Alex, your scheduling assistant. How can I help you today?\"\n\n[Dialog Flow]\n-Single person booking (1 person only)\n Gather: service type (support/maintenance/consultation/onsite/emergency), date, time, name, email, phone.\n After caller confirms, call function_tool with confirm: \"yes\".\n\n-Group booking (2+ people) - USE group_booking_tool ONLY\n Triggers: \"group\", \"multiple people\", \"team\", \"[number] people\", \"book for [name1] and [name2]\"\n\n Step 1: Ask booking type\n \"Which works best:\n  1) Everyone together (one event)\n  2) Individual sessions (different times)\n  3) Same time, separate bookings?\"\n\n Map response:\n  (1) or \"together\" or \"team meeting\" → bookingType: \"shared\"\n  (2) or \"different times\" or \"separate\" → bookingType: \"separate\"\n  (3) or \"same time but separate\" → bookingType: \"individual_same_slot\"\n\n Step 2: Gather info based on type\n • SHARED / INDIVIDUAL_SAME_SLOT:\n   - Ask: \"What date and time works for everyone?\"\n   - Ask: \"What service type?\"\n   - Ask: \"Give me each person's name and phone, one at a time.\"\n   - Collect: name, phone for each (email optional)\n\n • SEPARATE:\n   - Ask: \"How many people?\"\n   - For each person ask: name, phone, date/time, service type\n\n Step 3: Confirm\n SHARED: \"I'll book [service] on [date] at [time] for [X] people: [names]. Correct?\"\n SEPARATE: \"I'll book [X] appointments: [person1] on [date1], [person2] on [date2]... Correct?\"\n INDIVIDUAL_SAME_SLOT: \"I'll create individual events for [X] people at [date/time]: [names]. Correct?\"\n\n Step 4: Wait for \"yes\", then call group_booking_tool with confirm: \"yes\"\n\n-Lookup → Confirm → Cancel / Reschedule\n After lookup_tool:\n found: \"I found an appointment on {{DATE}} at {{TIME}} ({{TIMEZONE}}). Do you want to cancel or reschedule it?\"\n not_found: \"I couldn't find a booking with that info. Would you like to try a different phone or an email?\"\n need_phone: \"What phone number did you use to book?\"\n\n Cancel: on \"yes\", call cancel_tool with { bookingId, confirm: \"yes\" }.\n Reschedule: ask for new date/time, convert to ISO, call reschedule_tool.\n\n[Group Booking Response Handling]\n all_booked → \"Perfect! All [X] appointments booked.\"\n partial_success → \"[successCount] booked, [failureCount] failed: [reasons]. Want alternatives?\"\n all_failed → \"None booked: [reasons]. Let me suggest other times.\"\n\n[Alternatives & Missing Info]\nIf no_free_slot, read 1–2 options from alternatives, ask the caller to pick, then call the relevant tool again with the chosen times.\nIf need_more_info, ask only for the fields listed.\n\n [Timezone & Time Conversion Rules]\n  Default timezone: America/Chicago (unless the caller specifies another\n  IANA timezone).\n\n  IMPORTANT - Date Handling:\n  - TODAY is November 12, 2025\n  - \"tomorrow\" = November 13, 2025\n  - \"next week\" = 7 days from today\n  - Always use the CURRENT YEAR (2025) unless user specifies otherwise\n  - If caller gives date without year, assume current year (2025) if future,\n   otherwise next year (2026)\n\n  Convert requested local time to ISO with timezone offset (e.g.,\n  2025-11-13T14:00:00-06:00) and set timezone: \"America/Chicago\".\n  Observe DST correctly (after the first Sunday in November, America/Chicago\n   is UTC−06:00).\n\n[State to Track]\nPersist across turns:\nphone       → caller's number (E.164 if possible)\nbookingId   → from lookup/cancel/reschedule\nstage       → \"new\" | \"confirm\" | \"reschedule\" | \"cancel\"\ncarry       → { title, startIso, endIso, timezone }\n\n[Cancellation Policy]\nPhone-first: If user requests cancel and bookingId isn't known, use lookup_tool with phone (or email). Confirm using a human summary (date/time/timezone). Do not read or ask for long booking IDs.\n\n[Operating Context]\nRegular hours: Mon–Fri, 10 AM–6 PM America/Chicago (emergencies may be outside these hours).\nNew clients: 30-minute onboarding.\nCancellations must be ≥ 24 hours in advance.\n\n[Silence/Disconnect]\nIf the call disconnects or silence >10 s: call recover_tool with what you know, then end the call politely.\n\n[CRITICAL RULES]\n1. If 2+ people → MUST use group_booking_tool (ask booking type first)\n2. If 1 person → use function_tool\n3. Phone format: E.164 (+1XXXXXXXXXX for US)\n4. Business hours: 10 AM - 6 PM\n5. Always confirm before booking"
+                    }
+                  ],
+                  "provider": "openai",
+                  "temperature": 0.5,
+                  "tools": [
+                    {
+                      "id": "e3e93618-65cc-430e-96a1-99e96c97a6ab",
+                      "createdAt": "2025-11-04T09:32:33.595Z",
+                      "updatedAt": "2025-11-08T04:49:04.613Z",
+                      "type": "function",
+                      "function": {
+                        "name": "reschedule_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "newStartIso",
+                            "newEndIso",
+                            "bookingId",
+                            "timezone"
+                          ],
+                          "properties": {
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used to identify the existing appointment (fallback if no bookingId)"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "",
+                              "description": "IANA timezone, e.g., America/Chicago\n"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Exact Google Calendar event id, if known (preferred)"
+                            },
+                            "newEndIso": {
+                              "type": "string",
+                              "description": "New appointment end time in ISO format"
+                            },
+                            "newStartIso": {
+                              "type": "string",
+                              "description": "New appointment start time in ISO format"
+                            }
+                          }
+                        }
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/reschedule",
+                        "headers": {
+                          "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b"
+                        }
+                      }
+                    },
+                    {
+                      "id": "1de0d2dd-c744-4607-8bff-bdef102267f5",
+                      "createdAt": "2025-11-04T09:35:30.518Z",
+                      "updatedAt": "2025-11-05T09:56:51.667Z",
+                      "type": "function",
+                      "function": {
+                        "name": "cancel_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "confirm",
+                            "bookingId"
+                          ],
+                          "properties": {
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used when booking"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "description": "Optional reason provided by caller"
+                            },
+                            "confirm": {
+                              "enum": [
+                                "yes"
+                              ],
+                              "type": "string",
+                              "description": "Must be 'yes' to proceed with cancellation"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Event ID to cancel (preferred if available)"
+                            }
+                          }
+                        },
+                        "description": "Use this tool to cancel an appointment only when bookingId is already provided or known.\nIf the user says “cancel booking ID …”, do not ask for phone/email.\nFirst ask: “Please confirm you want to cancel booking ID ____ by replying yes.”\nOnly when the user replies “yes”, call this tool with { bookingId, confirm: \"yes\" }.\nIf no bookingId is provided, ask for phone/email first and call lookup_tool.\nNever ask for phone/email after a bookingId is given."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/cancel",
+                        "headers": {
+                          "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "90091906-a3a3-43e9-86b4-1ec9d70aeb4e",
+                      "createdAt": "2025-11-04T09:41:02.185Z",
+                      "updatedAt": "2025-11-05T10:52:33.488Z",
+                      "type": "function",
+                      "function": {
+                        "name": "lookup_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [],
+                          "properties": {
+                            "email": {
+                              "type": "string",
+                              "description": "Email used when booking"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Phone number used when booking"
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "description": "Exact Google Calendar event id if known"
+                            },
+                            "rangeEndIso": {
+                              "type": "string",
+                              "description": "Optional search window end (ISO)"
+                            },
+                            "rangeStartIso": {
+                              "type": "string",
+                              "description": "Optional search window start (ISO)"
+                            }
+                          }
+                        },
+                        "description": "Provide either phone or email. If neither is known, ask the user for one."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi-lookup",
+                        "headers": {
+                          "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "da8f8d98-221e-4a14-94e4-2435224a5eb4",
+                      "createdAt": "2025-11-05T12:50:43.995Z",
+                      "updatedAt": "2025-11-05T12:50:43.995Z",
+                      "type": "function",
+                      "function": {
+                        "name": "recover_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "stage"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "carry": {
+                              "type": "object",
+                              "properties": {
+                                "title": {
+                                  "type": "string"
+                                },
+                                "endIso": {
+                                  "type": "string"
+                                },
+                                "startIso": {
+                                  "type": "string"
+                                },
+                                "timezone": {
+                                  "type": "string"
+                                }
+                              },
+                              "description": "Partial booking info if we had it (title, startIso, endIso, timezone)."
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Caller phone (E.164 if possible)"
+                            },
+                            "stage": {
+                              "enum": [
+                                "new",
+                                "confirm",
+                                "reschedule",
+                                "cancel"
+                              ],
+                              "type": "string",
+                              "description": "Where the flow dropped."
+                            },
+                            "bookingId": {
+                              "type": "string",
+                              "description": "Known Google Calendar event id, if any"
+                            }
+                          }
+                        },
+                        "description": "Call this if the call disconnects mid-flow. Pass what you know so the system can send the correct follow-up."
+                      },
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/recover",
+                        "headers": {
+                          "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    },
+                    {
+                      "id": "0110b0d0-50db-4594-b468-8646899301bc",
+                      "createdAt": "2025-10-04T05:42:12.841Z",
+                      "updatedAt": "2025-11-08T05:26:45.384Z",
+                      "type": "function",
+                      "function": {
+                        "name": "function_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "title",
+                            "startIso",
+                            "endIso",
+                            "timezone",
+                            "name",
+                            "phone",
+                            "service_type",
+                            "email",
+                            "confirm"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "Caller full name"
+                            },
+                            "email": {
+                              "type": "string",
+                              "default": "",
+                              "description": ""
+                            },
+                            "notes": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Extra context"
+                            },
+                            "phone": {
+                              "type": "string",
+                              "description": "Caller phone in E.164 (e.g., +12145550123)"
+                            },
+                            "title": {
+                              "type": "string",
+                              "description": "Title of the appointment"
+                            },
+                            "endIso": {
+                              "type": "string",
+                              "default": "",
+                              "description": "End datetime in ISO 8601 (e.g., 2025-10-05T11:00:00-05:00)"
+                            },
+                            "confirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "default": "",
+                              "description": "User confirmation for the chosen slot; send \\\"yes\\\" when user explicitly confirms."
+                            },
+                            "startIso": {
+                              "type": "string",
+                              "default": "",
+                              "description": "Start datetime in ISO 8601 (e.g., 2025-10-05T10:30:00-05:00)"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "default": "America/Chicago",
+                              "description": "IANA timezone"
+                            },
+                            "attendees": {
+                              "type": "string",
+                              "description": "Comma-separated attendee emails (optional)"
+                            },
+                            "altConfirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "description": "Confirm alternative slot?"
+                            },
+                            "service_type": {
+                              "enum": [
+                                "general support",
+                                "maintenance",
+                                "consultation",
+                                "onsite",
+                                "emergency"
+                              ],
+                              "type": "string",
+                              "description": "Requested service category"
+                            }
+                          }
+                        },
+                        "description": "Send JSON with title, start, end, timezone, attendees, and notes.\nThe tool will respond with whether the appointment was booked, if more info is needed, or if no slot is available. When you call bookAppointment, Webhook returns JSON:\n\n{\"result\":\"booked|need_more_info|no_free_slot|error\",\n\"slot\":{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"},\n\"title\":\"<str>\",\"bookingId\":\"<id>\",\"calendarUrl\":\"<url>\",\n\"notes\":\"<str>\",\n\"alternatives\":[{\"start\":\"<ISO>\",\"end\":\"<ISO>\",\"timezone\":\"America/Chicago\"}],\n\"reason\":\"<str>\"}\n\nHandle:\n- booked → confirm title/date/time; end.\n- need_more_info → ask only for fields named in reason.\n- no_free_slot → read 1–2 items from alternatives, ask user to pick, then call tool again with chosen slot.\n- error → apologize and suggest trying later."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/call",
+                        "headers": {
+                          "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b"
+                        }
+                      }
+                    },
+                    {
+                      "id": "96fd301f-2dbe-47da-8101-bf3ddf379a5a",
+                      "createdAt": "2025-11-12T09:12:07.941Z",
+                      "updatedAt": "2025-11-12T09:12:07.941Z",
+                      "type": "function",
+                      "function": {
+                        "name": "group_booking_tool",
+                        "strict": true,
+                        "parameters": {
+                          "type": "object",
+                          "required": [
+                            "bookingType",
+                            "confirm"
+                          ],
+                          "properties": {
+                            "confirm": {
+                              "enum": [
+                                "yes",
+                                "no"
+                              ],
+                              "type": "string",
+                              "description": "Must be yes to proceed with booking. Ask user to confirm."
+                            },
+                            "bookingType": {
+                              "enum": [
+                                "shared",
+                                "separate",
+                                "individual_same_slot"
+                              ],
+                              "type": "string",
+                              "description": "SHARED = one event with all attendees together. SEPARATE = different times for each person. INDIVIDUAL_SAME_SLOT = same time but individual events for each person."
+                            },
+                            "sharedBooking": {
+                              "type": "object",
+                              "required": [
+                                "title",
+                                "startIso",
+                                "endIso",
+                                "timezone",
+                                "service_type",
+                                "attendees"
+                              ],
+                              "properties": {
+                                "notes": {
+                                  "type": "string",
+                                  "default": "",
+                                  "description": "Additional notes or special requests"
+                                },
+                                "title": {
+                                  "type": "string",
+                                  "description": "Title of the appointment"
+                                },
+                                "endIso": {
+                                  "type": "string",
+                                  "description": "End time in ISO 8601 format"
+                                },
+                                "startIso": {
+                                  "type": "string",
+                                  "description": "Start time in ISO 8601 format"
+                                },
+                                "timezone": {
+                                  "type": "string",
+                                  "default": "America/Chicago",
+                                  "description": "IANA timezone"
+                                },
+                                "attendees": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "name",
+                                      "phone"
+                                    ],
+                                    "properties": {
+                                      "name": {
+                                        "type": "string",
+                                        "description": "Full name of attendee"
+                                      },
+                                      "email": {
+                                        "type": "string",
+                                        "default": "",
+                                        "description": "Optional email address"
+                                      },
+                                      "phone": {
+                                        "type": "string",
+                                        "description": "Phone in E.164 format"
+                                      }
+                                    }
+                                  },
+                                  "maxItems": 10,
+                                  "minItems": 2,
+                                  "description": "List of all people for this group booking"
+                                },
+                                "service_type": {
+                                  "enum": [
+                                    "general support",
+                                    "maintenance",
+                                    "consultation",
+                                    "onsite",
+                                    "emergency"
+                                  ],
+                                  "type": "string",
+                                  "description": "Type of service being requested"
+                                }
+                              },
+                              "description": "Required when bookingType is shared or individual_same_slot"
+                            },
+                            "separateBookings": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "title",
+                                  "startIso",
+                                  "endIso",
+                                  "timezone",
+                                  "name",
+                                  "phone",
+                                  "service_type"
+                                ],
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "description": "Name of the person for this appointment"
+                                  },
+                                  "email": {
+                                    "type": "string",
+                                    "default": "",
+                                    "description": "Optional email"
+                                  },
+                                  "notes": {
+                                    "type": "string",
+                                    "default": ""
+                                  },
+                                  "phone": {
+                                    "type": "string",
+                                    "description": "Phone in E.164 format"
+                                  },
+                                  "title": {
+                                    "type": "string",
+                                    "description": "Title of this specific appointment"
+                                  },
+                                  "endIso": {
+                                    "type": "string",
+                                    "description": "End time in ISO 8601 format"
+                                  },
+                                  "startIso": {
+                                    "type": "string",
+                                    "description": "Start time in ISO 8601 format"
+                                  },
+                                  "timezone": {
+                                    "type": "string",
+                                    "default": "America/Chicago",
+                                    "description": "IANA timezone"
+                                  },
+                                  "service_type": {
+                                    "enum": [
+                                      "general support",
+                                      "maintenance",
+                                      "consultation",
+                                      "onsite",
+                                      "emergency"
+                                    ],
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "maxItems": 10,
+                              "minItems": 2,
+                              "description": "Required when bookingType is separate. Each item is a different appointment."
+                            }
+                          }
+                        },
+                        "description": "Book appointments for multiple people. Supports three modes: (1) SHARED - One appointment with multiple attendees like team meeting. (2) INDIVIDUAL_SAME_SLOT - Same time slot but separate calendar events for each person like group training. (3) SEPARATE - Different time slots for different people. Before calling collect all attendee names and phone numbers, confirm the booking type with the user, verify the time slots are within business hours 10 AM to 6 PM, and get explicit yes confirmation before proceeding."
+                      },
+                      "messages": [
+                        {
+                          "type": "request-start",
+                          "blocking": false
+                        }
+                      ],
+                      "orgId": "db5415bc-b28a-407c-be48-dcc9869b0f12",
+                      "server": {
+                        "url": "https://polarmedia.app.n8n.cloud/webhook/vapi/group-booking",
+                        "headers": {
+                          "X-Chat-Id": "7cf82656-9af7-424b-81fd-2e64f0b95c4b",
+                          "Content-Type": "application/json"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "recordingEnabled": false,
+                "firstMessage": "Hello, my name Alex. Thanks for calling Quantum Ops, how may I assist you today?",
+                "voicemailMessage": "Hello, this is Riley from Wellness Partners. I'm calling about your appointment. Please call us back at your earliest convenience so we can confirm your scheduling details.",
+                "endCallMessage": "Perfect! Your appointment has been scheduled. You'll receive a confirmation email shortly. Have a great day!",
+                "transcriber": {
+                  "model": "nova-2",
+                  "language": "en",
+                  "numerals": false,
+                  "provider": "deepgram",
+                  "endpointing": 300,
+                  "confidenceThreshold": 0.4
+                },
+                "clientMessages": [
+                  "conversation-update",
+                  "function-call",
+                  "hang",
+                  "model-output",
+                  "speech-update",
+                  "status-update",
+                  "transfer-update",
+                  "transcript",
+                  "tool-calls",
+                  "user-interrupted",
+                  "voice-input",
+                  "workflow.node.started"
+                ],
+                "hipaaEnabled": false,
+                "analysisPlan": {
+                  "minMessagesThreshold": 2
+                },
+                "backgroundDenoisingEnabled": false,
+                "artifactPlan": {
+                  "structuredOutputIds": [
+                    "714f8cf2-ed60-4a8f-acb9-524afaafab35"
+                  ]
+                },
+                "startSpeakingPlan": {
+                  "waitSeconds": 0.4,
+                  "transcriptionEndpointingPlan": {
+                    "onNumberSeconds": 0.5,
+                    "onPunctuationSeconds": 0.1,
+                    "onNoPunctuationSeconds": 1.5
+                  }
+                }
+              }
+            }
+          },
+          "webhookUrl": "https://polarmedia.app.n8n.cloud/webhook/vapi/group-booking",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Webhook (Group Booking)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Group Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Group Booking": {
+      "main": [
+        [
+          {
+            "node": "Confirmed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmed?": {
+      "main": [
+        [
+          {
+            "node": "Split into Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Need Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split into Items": {
+      "main": [
+        [
+          {
+            "node": "Check Availability",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Availability": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Validate Availability": {
+      "main": [
+        [
+          {
+            "node": "Is Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Available?": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Mark as Booked": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Failed": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Validate Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Mark as Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "fd5f158b-dfeb-4fe3-8ba7-fcf47b1db6e6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "BtJPUW5xXfEnQL2M",
+  "tags": []
+}
