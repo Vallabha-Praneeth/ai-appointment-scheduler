@@ -1,0 +1,96 @@
+<h1 id="ai-appointment-scheduler">AI Appointment Scheduler</h1>
+<hr />
+<h2 id="project-description">Project Description</h2>
+<p>This project is an AI-powered appointment scheduling assistant built
+on the n8n workflow automation platform. It uses a voice AI assistant
+from Vapi to handle user interactions over the phone, and integrates
+with Google Calendar for scheduling and Twilio for sending SMS
+reminders.</p>
+<hr />
+<h2 id="kanban-board">Kanban Board</h2>
+<pre class="mermaid"><code>kanban
+    title Appointment Scheduler Project
+    section To Do
+        Implement conflict handling: 2d
+        Support more calendar providers: 3d
+        Create analytics dashboard: 5d
+    section In Progress
+        Develop booking workflow: 3d
+        Integrate Twilio for SMS: 2d
+    section Done
+        User authentication: 1d
+        Vapi voice assistant setup: 2d
+        Google Calendar integration: 2d
+        OpenAI model integration: 2d</code></pre>
+<hr />
+<h2 id="workflow-tree">Workflow Tree</h2>
+<pre class="mermaid"><code>graph TD
+    A[User calls Vapi Voice Assistant] --&gt; B{User wants to...};
+    B --&gt; C[Book an appointment];
+    B --&gt; D[Confirm an appointment];
+    B --&gt; E[Cancel an appointment];
+    B --&gt; F[Reschedule an appointment];
+
+    C --&gt; G[Vapi calls n8n webhook for booking];
+    G --&gt; H[n8n workflow checks Google Calendar for availability];
+    H --&gt; I{Is slot available?};
+    I --&gt;|Yes| J[n8n creates event in Google Calendar];
+    J --&gt; K[n8n sends confirmation SMS via Twilio];
+    K --&gt; L[Vapi confirms booking to the user];
+    I --&gt;|No| M[Vapi informs user that the slot is not available];</code></pre>
+<hr />
+<h2 id="sequence-diagram">Sequence Diagram</h2>
+<pre class="mermaid"><code>sequenceDiagram
+    participant User
+    participant Vapi
+    participant n8n
+    participant Google Calendar
+    participant Twilio
+
+    User-&gt;&gt;Vapi: Calls and requests to book an appointment
+    Vapi-&gt;&gt;n8n: POST /webhook/book (with appointment details)
+    n8n-&gt;&gt;Google Calendar: Check availability
+    Google Calendar--&gt;&gt;n8n: Returns availability
+    alt Slot is available
+        n8n-&gt;&gt;Google Calendar: Create event
+        Google Calendar--&gt;&gt;n8n: Event created
+        n8n-&gt;&gt;Twilio: Send confirmation SMS
+        Twilio--&gt;&gt;n8n: SMS sent
+        n8n--&gt;&gt;Vapi: { result: &#39;booked&#39;, ... }
+        Vapi-&gt;&gt;User: &quot;Your appointment is booked!&quot;
+    else Slot is not available
+        n8n--&gt;&gt;Vapi: { result: &#39;no_free_slot&#39;, ... }
+        Vapi-&gt;&gt;User: &quot;That time is not available.&quot;
+    end</code></pre>
+<hr />
+<h2 id="gantt-chart">Gantt Chart</h2>
+<pre class="mermaid"><code>gantt
+    title Appointment Scheduler Project Timeline
+    dateFormat  YYYY-MM-DD
+    section Project Setup
+    Initial setup           :done,    des1, 2025-11-01, 2d
+    Vapi integration        :done,    des2, 2025-11-03, 3d
+    Google Calendar setup   :done,    des3, 2025-11-03, 2d
+
+    section Core Features
+    Booking workflow        :active,  des4, 2025-11-06, 5d
+    Cancellation workflow   :         des5, 2025-11-11, 3d
+    Rescheduling workflow   :         des6, 2025-11-14, 3d
+
+    section Advanced Features
+    Twilio reminders        :         des7, 2025-11-19, 4d
+    Analytics dashboard     :         des8, 2025-11-25, 5d</code></pre>
+<hr />
+<h2 id="pie-chart-appointment-types">Pie Chart: Appointment Types</h2>
+<pre class="mermaid"><code>pie
+    title Appointment Types
+    &quot;Consultation&quot; : 45
+    &quot;Support&quot; : 25
+    &quot;Maintenance&quot; : 15
+    &quot;Onsite&quot; : 10
+    &quot;Emergency&quot; : 5</code></pre>
+<hr />
+<h2 id="production-readiness">Production Readiness</h2>
+<p>For detailed instructions on how to make this project
+production-ready, please refer to the <code>Project_Workflow.md</code>
+file.</p>
