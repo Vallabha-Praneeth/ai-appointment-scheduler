@@ -5,18 +5,25 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "vapi-lookup",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -1008,
+        -1216,
         -16
       ],
       "id": "1ed43678-6e84-450b-987a-0e75a9eb269b",
       "name": "Vapi Lookup (in)",
-      "webhookId": "fdab012d-7bb9-4afc-b28e-c4b3347ce7c1"
+      "webhookId": "fdab012d-7bb9-4afc-b28e-c4b3347ce7c1",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mtbZQ3YR4VQJHsPz",
+          "name": "Webhook Secret"
+        }
+      }
     },
     {
       "parameters": {
@@ -238,17 +245,16 @@
     },
     {
       "parameters": {
-        "jsCode": " // --- unwrap inbound ---\n  const root = $json || {};\n  const body = (root.body && typeof root.body === 'object') ? root.body :\n  {};\n  const msg  = (body.message && typeof body.message === 'object') ?\n  body.message : {};\n\n  // get toolCallId for wrapper later\n  let callId = \"\";\n  if (msg.toolCalls && msg.toolCalls[0] && msg.toolCalls[0].id) {\n    callId = msg.toolCalls[0].id;\n  } else if (msg.toolCallList && msg.toolCallList[0] &&\n  msg.toolCallList[0].id) {\n    callId = msg.toolCallList[0].id;\n  }\n\n  // pull the first tool call's arguments (string or object)\n  let args = {};\n  if (msg.toolCalls && msg.toolCalls[0] && msg.toolCalls[0].function &&\n  msg.toolCalls[0].function.arguments) {\n    args = msg.toolCalls[0].function.arguments;\n  } else if (msg.toolCallList && msg.toolCallList[0] &&\n  msg.toolCallList[0].function && msg.toolCallList[0].function.arguments) {\n    args = msg.toolCallList[0].function.arguments;\n  }\n\n  if (typeof args === 'string') {\n    try {\n      args = JSON.parse(args);\n    } catch (e) {\n      args = {};\n    }\n  }\n\n  // normalize phone\n  function normPhone(raw) {\n    const s = String(raw || \"\");\n    const digits = (s.match(/\\d/g) || []).join(\"\");\n    const last10 = digits.slice(-10);\n    const last7  = digits.slice(-7);\n    const e164   = digits ? (\"+\" + digits) : \"\";\n    return { raw: s, digits: digits, last10: last10, last7: last7, e164:\n  e164, valid: !!digits };\n  }\n\n  const phoneIn = args.phone || body.phone || root.phone || \"\";\n  const p = normPhone(phoneIn);\n\n  // choose bookingId from any likely place\n  const bookingId = args.bookingId || body.bookingId || root.bookingId ||\n  \"\";\n\n  // pass through email if present for fallback search\n  const email = args.email || body.email || root.email || \"\";\n\n  // build normalized output\n  return [{\n    json: {\n      callId: callId,\n      phone: p.e164,\n      phoneDigits: p.digits,\n      phoneValid: p.valid,\n      debug: {\n        phoneRaw: p.raw,\n        phoneE164: p.e164,\n        last10: p.last10,\n        last7: p.last7\n      },\n      bookingId: bookingId,\n      email: email\n    }\n  }];"
+        "jsCode": "// LOOKUP VALIDATION\n  const body = $json.body || $json;\n  const args = body?.message?.toolCalls?.[0]?.function?.arguments;\n\n  let input = {};\n  if (typeof args === 'string') {\n    try { input = JSON.parse(args); } catch (e) { input = body; }\n  } else {\n    input = args || body;\n  }\n\n  // Validate phone (extract digits)\n  function validatePhone(raw) {\n    if (!raw) return null;\n    const digits = String(raw).replace(/\\D/g, '');\n    if (digits.length < 7 || digits.length > 15) return null;\n    if (digits.length === 10) return '+1' + digits;\n    if (digits.length === 11 && digits[0] === '1') return '+' + digits;\n    return '+' + digits;\n  }\n\n  // Sanitize text (remove XSS)\n  function sanitize(raw) {\n    if (!raw) return null;\n    return String(raw).replace(/[<>\\\"\\'&]/g, '').trim().substring(0, 100);\n  }\n\n  const validated = {\n    phone: validatePhone(input.phone),\n    email: input.email ? String(input.email).trim().toLowerCase() : null,\n    name: sanitize(input.name),\n    bookingId: sanitize(input.bookingId)\n  };\n\n  return { json: { ...$json, ...validated, _validated: true } };"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -624,
-        -336
+        -1008,
+        -16
       ],
-      "id": "b4835f15-40b4-4121-a2ef-f3a0d1ece952",
-      "name": "Normalise lookup (compatible)",
-      "disabled": true
+      "id": "fdef455f-bbd4-49ef-8aa3-c907104cf4a5",
+      "name": "Validate Input"
     }
   ],
   "pinData": {
@@ -901,7 +907,7 @@
       "main": [
         [
           {
-            "node": "Gaurdrails",
+            "node": "Validate Input",
             "type": "main",
             "index": 0
           }
@@ -1021,9 +1027,15 @@
         ]
       ]
     },
-    "Normalise lookup (compatible)": {
+    "Validate Input": {
       "main": [
-        []
+        [
+          {
+            "node": "Gaurdrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
@@ -1031,7 +1043,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "19ceb504-b2b9-4614-9ce4-524b22a05774",
+  "versionId": "6f172f7a-7a56-46ad-9faf-f8c986d3ba13",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"

@@ -5,18 +5,25 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "vapi/cancel",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -928,
+        -1072,
         0
       ],
       "id": "d54e2e0b-78b1-4392-95fd-0313a50de9eb",
       "name": "Webhook",
-      "webhookId": "9912b6ee-3f83-4839-837c-2b55b6a70dd8"
+      "webhookId": "9912b6ee-3f83-4839-837c-2b55b6a70dd8",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mtbZQ3YR4VQJHsPz",
+          "name": "Webhook Secret"
+        }
+      }
     },
     {
       "parameters": {
@@ -150,7 +157,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Always return a clean cancel result (idempotent)\nconst id =\n  $json.id ||\n  $json.eventId ||\n  $item(0).$node[\"Validate Cancel\"]?.json?.bookingId ||\n  $json.bookingId || \"\";\n\nconst hadError = !!$json.error || /invalid|deleted|not\\s*found|gone/i.test(JSON.stringify($json));\n\nreturn [{\n  json: {\n    result: \"canceled\",\n    status: hadError ? \"already_deleted_or_not_found\" : \"deleted\",\n    bookingId: id\n  }\n}];"
+        "jsCode": "// Always return a clean cancel result (idempotent)\nconst id =\n  $json.id ||\n  $json.eventId ||\n  $item(0).$node[\"Validate Cancel\"]?.json?.bookingId ||\n  $json.bookingId || \"\";\n\n// Determine if this was a first-time deletion or already deleted\n// Google Calendar returns:\n//   - 204 (No Content) or 200 for successful deletion\n//   - 404 (Not Found) or 410 (Gone) if already deleted\n//   - $json.error for API errors\nconst statusCode = $json.statusCode || $json.status || 0;\nconst alreadyDeleted = \n  statusCode === 404 || \n  statusCode === 410 || \n  ($json.error && ($json.error.code === 404 || $json.error.code === 410));\n\nconst successMsg = \"Your appointment has been successfully canceled.\";\nconst alreadyDeletedMsg = \"This appointment was already canceled or not found.\";\n\n// Return appropriate result\nif (alreadyDeleted) {\n  return [{\n    json: {\n      result: \"already_deleted_or_not_found\",\n      bookingId: id,\n      message: alreadyDeletedMsg\n    }\n  }];\n}\n\n// Successful deletion\nreturn [{\n  json: {\n    result: \"cancelled\",\n    bookingId: id,\n    message: successMsg\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -253,6 +260,19 @@
       ],
       "id": "4f238846-ee9c-4c0a-94e0-93e18a4bb950",
       "name": "Vapi Wrapper (Cancel)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// CANCEL VALIDATION\n  const body = $json.body || $json;\n  const args = body?.message?.toolCalls?.[0]?.function?.arguments;\n\n  let input = {};\n  if (typeof args === 'string') {\n    try { input = JSON.parse(args); } catch (e) { input = body; }\n  } else {\n    input = args || body;\n  }\n\n  // Validate phone\n  function validatePhone(raw) {\n    if (!raw) return null;\n    const digits = String(raw).replace(/\\D/g, '');\n    if (digits.length < 7 || digits.length > 15) return null;\n    if (digits.length === 10) return '+1' + digits;\n    if (digits.length === 11 && digits[0] === '1') return '+' + digits;\n    return '+' + digits;\n  }\n\n  // Sanitize (remove XSS, limit length)\n  function sanitize(raw) {\n    if (!raw) return null;\n    return String(raw).replace(/[<>\\\"\\'&]/g, '').trim().substring(0, 200);\n  }\n\n  // Validate confirm (must be boolean or yes/no)\n  function validateConfirm(raw) {\n    if (raw === true || raw === 'yes' || raw === 'true') return true;\n    if (raw === false || raw === 'no' || raw === 'false') return false;\n    return null;\n  }\n\n  const validated = {\n    phone: validatePhone(input.phone),\n    bookingId: sanitize(input.bookingId),\n    confirm: validateConfirm(input.confirm || input.confirmed)\n  };\n\n  return { json: { ...$json, ...validated, _validated: true } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -912,
+        0
+      ],
+      "id": "1630551c-f87a-48e7-b31b-e161c6df9a19",
+      "name": "Validate Input"
     }
   ],
   "pinData": {
@@ -1064,7 +1084,7 @@
       "main": [
         [
           {
-            "node": "Validate Cancel",
+            "node": "Validate Input",
             "type": "main",
             "index": 0
           }
@@ -1187,13 +1207,24 @@
           }
         ]
       ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Validate Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "71ad79d0-5906-46b9-985c-3d577b82c8e7",
+  "versionId": "f7705158-62d5-4361-98bd-d7ff97e0e81e",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"

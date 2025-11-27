@@ -5,6 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "vapi/check-availability",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -16,7 +17,13 @@
       ],
       "id": "a0ea0203-f702-498c-9a14-2ea74e91ded2",
       "name": "Webhook (Check Availability)",
-      "webhookId": "check-availability-webhook"
+      "webhookId": "check-availability-webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mtbZQ3YR4VQJHsPz",
+          "name": "Webhook Secret"
+        }
+      }
     },
     {
       "parameters": {
@@ -139,8 +146,9 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "632fb9f1-af37-4bcc-92ed-c92314e5049e",
+  "versionId": "a36fbce7-2871-429f-8a87-c6f6ad6e436f",
   "meta": {
+    "templateCredsSetupCompleted": true,
     "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
   },
   "id": "NpAql8ZatvAJ5nTA",

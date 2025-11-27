@@ -1,0 +1,412 @@
+{
+  "name": "Error Handler Template",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "566e23a0-738f-4cc7-925c-f087960f7039",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -752,
+        -304
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced Error Handler with Context\nconst error = $input.item.json;\nconst now = new Date();\n\n// Extract error details\nconst errorDetails = {\n  timestamp: now.toISOString(),\n  timestampLocal: now.toLocaleString('en-US', { timeZone: 'America/Chicago' }),\n  workflowName: $workflow.name,\n  workflowId: $workflow.id,\n  executionId: $execution.id,\n  nodeName: error.node?.name || 'Unknown',\n  nodeType: error.node?.type || 'Unknown',\n  errorMessage: error.error?.message || 'Unknown error',\n  errorType: error.error?.name || 'Error',\n  errorStack: error.error?.stack || '',\n  \n  // Input data that caused the error\n  inputData: JSON.stringify($input.item.json, null, 2),\n  \n  // Determine severity\n  severity: 'MEDIUM',\n  alertMethod: 'SLACK'\n};\n\n// Classify error severity\nconst criticalKeywords = ['calendar', 'twilio', 'authentication', 'timeout', 'network'];\nconst errorLower = errorDetails.errorMessage.toLowerCase();\n\nif (criticalKeywords.some(kw => errorLower.includes(kw))) {\n  errorDetails.severity = 'HIGH';\n  errorDetails.alertMethod = 'SMS';\n}\n\n// Check if this is a validation error (less critical)\nif (errorLower.includes('validation') || errorLower.includes('missing')) {\n  errorDetails.severity = 'LOW';\n  errorDetails.alertMethod = 'LOG';\n}\n\n// Format alert messages\nerrorDetails.shortMessage = `🚨 ${errorDetails.severity}: ${errorDetails.workflowName} - ${errorDetails.errorMessage.substring(0, 100)}`;\n\nerrorDetails.detailedMessage = `\n🚨 Workflow Error Report\n\nWorkflow: ${errorDetails.workflowName}\nNode: ${errorDetails.nodeName} (${errorDetails.nodeType})\nTime: ${errorDetails.timestampLocal}\nSeverity: ${errorDetails.severity}\n\nError: ${errorDetails.errorMessage}\n\nExecution ID: ${errorDetails.executionId}\nDirect Link: https://polarmedia.app.n8n.cloud/workflow/${errorDetails.workflowId}/executions/${errorDetails.executionId}\n\n--- Input Data ---\n${errorDetails.inputData.substring(0, 500)}\n`;\n\n// Log to console for n8n execution log\nconsole.error('ERROR_HANDLER:', errorDetails);\n\nreturn [{ json: errorDetails }];"
+      },
+      "id": "05f00805-3563-4b08-afd5-a0ba3cb63258",
+      "name": "Process Error Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.severity}}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "HIGH"
+            },
+            {
+              "value2": "MEDIUM",
+              "output": 1
+            },
+            {
+              "value2": "LOW",
+              "output": 2
+            }
+          ]
+        }
+      },
+      "id": "e1e9ced9-dd5f-40db-bc6c-d4f04b097560",
+      "name": "Route by Severity",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "from": " +14694365607",
+        "to": "+919494348091",
+        "message": "={{$json.shortMessage}}",
+        "options": {}
+      },
+      "id": "0756b4a6-128e-498b-8dec-ca7d25318039",
+      "name": "Send SMS Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        -144
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "seXtNTssV0vIqTCu",
+          "name": "Twilio account Full"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "=1ewZhow8YltZJy9cNynnZ6-ei5v32XuRHKV8rPJ9l6JI",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Error Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{$json.timestamp}}",
+            "Workflow": "={{$json.workflowName}}",
+            "Node": "={{$json.nodeName}}",
+            "Severity": "={{$json.severity}}",
+            "Error_Type": "={{$json.errorType}}",
+            "Error_Message": "={{$json.errorMessage}}",
+            "Execution_ID": "={{$json.executionId}}",
+            "Input_Data": "={{$json.inputData.substring(0, 1000)}}",
+            "Alert_Sent": "={{$json.alertMethod}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Workflow",
+              "displayName": "Workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Node",
+              "displayName": "Node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Severity",
+              "displayName": "Severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Error_Type",
+              "displayName": "Error_Type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Error_Message",
+              "displayName": "Error_Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Execution_ID",
+              "displayName": "Execution_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Input_Data",
+              "displayName": "Input_Data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alert_Sent",
+              "displayName": "Alert_Sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "392c06d6-579e-4931-bf1c-c1a8de674811",
+      "name": "Log to Error Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        160,
+        64
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PQRbHs2eHA4g1ECp",
+          "name": "My_Qops_Mail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if this error has occurred multiple times recently\n// This helps identify recurring issues\n\nconst currentError = $json;\nconst recentErrors = $('Log to Error Sheet').all();\n\n// Count similar errors in last hour\nconst oneHourAgo = Date.now() - (60 * 60 * 1000);\nlet similarCount = 0;\n\nfor (const item of recentErrors) {\n  const errTime = new Date(item.json.Timestamp).getTime();\n  if (errTime > oneHourAgo && \n      item.json.Workflow === currentError.workflowName &&\n      item.json.Error_Message === currentError.errorMessage) {\n    similarCount++;\n  }\n}\n\n// If this error occurred 3+ times in last hour, escalate\nif (similarCount >= 3) {\n  return [{\n    json: {\n      ...currentError,\n      isRecurring: true,\n      occurrenceCount: similarCount,\n      escalationMessage: `🔴 RECURRING ERROR ALERT\\n\\nThis error has occurred ${similarCount} times in the last hour!\\n\\n${currentError.detailedMessage}`\n    }\n  }];\n}\n\nreturn [];"
+      },
+      "id": "838ffe00-66bc-4634-9b71-0b9218bcca1a",
+      "name": "Check if Recurring",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C09V81BJ71B",
+          "mode": "list",
+          "cachedResultName": "system-alerts-appointment_ai"
+        },
+        "text": "={{$json.escalationMessage}}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        528,
+        64
+      ],
+      "id": "5ddce2e5-bbe4-4863-aa97-353fe5a893a2",
+      "name": "Send Escalation Alert",
+      "webhookId": "5baa7af0-a4ac-4f6f-bebe-233496a72559",
+      "credentials": {
+        "slackApi": {
+          "id": "YXLPEtsavAaE4hCV",
+          "name": "slacker_chat_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C09V81BJ71B",
+          "mode": "list",
+          "cachedResultName": "system-alerts-appointment_ai"
+        },
+        "text": "={{$json.detailedMessage}}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        -144,
+        32
+      ],
+      "id": "5376c908-e956-44b1-b17e-e435cd5d9b01",
+      "name": "Send Email Alert",
+      "webhookId": "08711c93-2518-42cd-9e2e-4c32e7143c67",
+      "credentials": {
+        "slackApi": {
+          "id": "YXLPEtsavAaE4hCV",
+          "name": "slacker_chat_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "error-handler",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -768,
+        48
+      ],
+      "id": "9a555031-c8d9-4379-b9cc-d7e92264b7f9",
+      "name": "Webhook",
+      "webhookId": "51d4bbe7-88ea-4c89-a1e4-6e9985480582"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        []
+      ]
+    },
+    "Process Error Details": {
+      "main": [
+        [
+          {
+            "node": "Route by Severity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Severity": {
+      "main": [
+        [
+          {
+            "node": "Send SMS Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Error Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Email Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Error Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log to Error Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS Alert": {
+      "main": [
+        []
+      ]
+    },
+    "Log to Error Sheet": {
+      "main": [
+        [
+          {
+            "node": "Check if Recurring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Recurring": {
+      "main": [
+        [
+          {
+            "node": "Send Escalation Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Alert": {
+      "main": [
+        []
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Process Error Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "aaa0cd95-0526-4489-801f-741f725e07af",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "tG0jYV0MZubLn7dJ",
+  "tags": [
+    {
+      "updatedAt": "2025-11-26T06:09:33.003Z",
+      "createdAt": "2025-11-26T06:09:33.003Z",
+      "id": "RmlDAdx8NXtUdRuw",
+      "name": "monitoring"
+    }
+  ]
+}

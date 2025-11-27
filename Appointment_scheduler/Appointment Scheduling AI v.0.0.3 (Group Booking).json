@@ -5,6 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "vapi/group-booking",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -16,7 +17,13 @@
       ],
       "id": "eefbc8b8-61e7-4501-8da9-b1ce9151355a",
       "name": "Webhook (Group Booking)",
-      "webhookId": "group-booking-webhook"
+      "webhookId": "group-booking-webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mtbZQ3YR4VQJHsPz",
+          "name": "Webhook Secret"
+        }
+      }
     },
     {
       "parameters": {
@@ -1668,7 +1675,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "fd5f158b-dfeb-4fe3-8ba7-fcf47b1db6e6",
+  "versionId": "7fbbde64-ee72-45d4-b3ef-c2232c1f0865",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"

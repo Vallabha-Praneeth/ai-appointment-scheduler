@@ -261,18 +261,25 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "vapi/call",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -3072,
+        -3328,
         304
       ],
       "id": "6b8437e0-39f9-49a2-acb1-9c09b74ec82a",
       "name": "Webhook",
-      "webhookId": "72212877-5c69-499c-a97d-cf609765e8de"
+      "webhookId": "72212877-5c69-499c-a97d-cf609765e8de",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mtbZQ3YR4VQJHsPz",
+          "name": "Webhook Secret"
+        }
+      }
     },
     {
       "parameters": {
@@ -551,6 +558,19 @@
       ],
       "id": "40e15df6-422d-4724-9121-32de4e241dbb",
       "name": "Vapi Wrapper1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// INPUT VALIDATION\n  const body = $json.body || $json;\n  const args = body?.message?.toolCalls?.[0]?.function?.arguments;\n\n  let input = {};\n  if (typeof args === 'string') {\n    try { input = JSON.parse(args); } catch (e) { input = body; }\n  } else {\n    input = args || body;\n  }\n\n  // Validate phone\n  function validatePhone(raw) {\n    if (!raw) return null;\n    const digits = String(raw).replace(/\\D/g, '');\n    if (digits.length < 7 || digits.length > 15) return null;\n    if (digits.length === 10) return '+1' + digits;\n    if (digits.length === 11 && digits[0] === '1') return '+' + digits;\n    return '+' + digits;\n  }\n\n  // Sanitize name (remove XSS characters)\n  function sanitizeName(raw) {\n    if (!raw) return null;\n    return String(raw).replace(/[<>\\\"\\'&]/g, '').trim().substring(0, 100);\n  }\n\n  // Validate email\n  function validateEmail(raw) {\n    if (!raw) return null;\n    const email = String(raw).trim().toLowerCase();\n    return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) ? email : null;\n  }\n\n  // Apply validation\n  const validated = {\n    phone: validatePhone(input.phone),\n    name: sanitizeName(input.name || input.fullName),\n    email: validateEmail(input.email),\n    service_type: ['support','maintenance','consultation','onsite','emergency']\n      .includes(String(input.service_type || '').toLowerCase())\n      ? String(input.service_type).toLowerCase()\n      : 'consultation',\n    timezone: input.timezone || input.tz || 'America/Chicago',\n    startIso: input.startIso,\n    endIso: input.endIso,\n    confirm: input.confirm || \"\"\n  };\n\n  return { json: { ...$json, ...validated, _validated: true } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3088,
+        304
+      ],
+      "id": "92b448fa-9128-46b6-9734-0c303401b85c",
+      "name": "Validate Input"
     }
   ],
   "pinData": {
@@ -1358,7 +1378,7 @@
         ],
         [
           {
-            "node": "Call 'Appointment Scheduling AI_v.0.0.3(If_Confirm_No)'",
+            "node": "Ensure Confirm",
             "type": "main",
             "index": 0
           }
@@ -1458,7 +1478,7 @@
       "main": [
         [
           {
-            "node": "AI — Extract Booking Fields",
+            "node": "Validate Input",
             "type": "main",
             "index": 0
           }
@@ -1614,6 +1634,17 @@
           }
         ]
       ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "AI — Extract Booking Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
@@ -1622,7 +1653,7 @@
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": false
   },
-  "versionId": "4a2e0033-88f9-4ec9-b6cc-30bcbc7d5384",
+  "versionId": "b34521d3-9949-4ad2-9a4f-b0b7907abee3",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"

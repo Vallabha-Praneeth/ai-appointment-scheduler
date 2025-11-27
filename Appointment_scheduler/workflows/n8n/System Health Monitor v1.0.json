@@ -1,0 +1,588 @@
+{
+  "name": "System Health Monitor v1.0",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "de525e53-55f1-4e1c-9222-a5e4ebe73d9f",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1296,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": " // System Health Monitor - Check all workflows\n  const now = new Date();\n  const checks = [];\n\n  // Define all critical workflows to monitor\n  const workflows = [\n    {\n      name: 'Main Booking',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi/call',\n      critical: true\n    },\n    {\n      name: 'Lookup',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi-lookup',\n      critical: true\n    },\n    {\n      name: 'Cancel',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi/cancel',\n      critical: true\n    },\n    {\n      name: 'Reschedule',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi/reschedule',\n      critical: true\n    },\n    {\n      name: 'Recovery',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi/recover',\n      critical: false\n    },\n    {\n      name: 'Check Availability',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi/check-availability',\n      critical: false\n    },\n    {\n      name: 'Group Booking',\n      webhook: 'https://polarmedia.app.n8n.cloud/webhook/vapi/group-booking',\n      critical: false\n    }\n  ];\n\n  // Return check configuration\n  return workflows.map(wf => ({\n    json: {\n      workflowName: wf.name,  // ← Make sure this line exists!\n      webhookUrl: wf.webhook,\n      isCritical: wf.critical,\n      checkTime: now.toISOString(),\n      expectedStatus: 200\n    }\n  }));"
+      },
+      "id": "6016df74-a248-45d2-bcfd-f9efe237d78e",
+      "name": "Prepare Health Checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "HEAD",
+        "url": "={{$json.webhookUrl}}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "includeInputFields": "fields",
+              "fields": "workflowName,webhookUrl,isCritical,checkTime,expectedStatus"
+            }
+          }
+        }
+      },
+      "id": "14080dcd-13e6-4834-acd4-c43cf0691399",
+      "name": "Check Webhook Endpoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -896,
+        112
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Analyze health check results\nconst items = $input.all();\nconst results = {\n  totalChecks: items.length,\n  healthy: 0,\n  unhealthy: 0,\n  critical_failures: [],\n  warnings: [],\n  timestamp: new Date().toISOString(),\n  allHealthy: true\n};\n\nfor (const item of items) {\n  const data = item.json;\n  const statusCode = data.statusCode || data.error?.status || 0;\n  const isHealthy = statusCode === 200 || statusCode === 405 || statusCode === 404 || statusCode === 403; // 405/404 = wrong method, 403 = inactive workflow\n  \n  if (isHealthy) {\n    results.healthy++;\n  } else {\n    results.unhealthy++;\n    results.allHealthy = false;\n    \n    const issue = {\n      workflow: data.workflowName,\n      endpoint: data.webhookUrl,\n      status: statusCode,\n      error: data.error?.message || 'No response',\n      time: data.checkTime\n    };\n    \n    if (data.isCritical) {\n      results.critical_failures.push(issue);\n    } else {\n      results.warnings.push(issue);\n    }\n  }\n}\n\n// Calculate health percentage\nresults.healthPercentage = ((results.healthy / results.totalChecks) * 100).toFixed(1);\n\n// Determine severity\nif (results.critical_failures.length > 0) {\n  results.severity = 'CRITICAL';\n  results.alertMethod = 'SMS';\n} else if (results.unhealthy > 2) {\n  results.severity = 'HIGH';\n  results.alertMethod = 'SLACK';\n} else if (results.unhealthy > 0) {\n  results.severity = 'WARNING';\n  results.alertMethod = 'LOG';\n} else {\n  results.severity = 'OK';\n  results.alertMethod = 'NONE';\n}\n\n// Format alert message\nif (!results.allHealthy) {\n  let message = `🚨 System Health Alert\\n\\n`;\n  message += `Severity: ${results.severity}\\n`;\n  message += `Health: ${results.healthPercentage}% (${results.healthy}/${results.totalChecks})\\n`;\n  message += `Time: ${new Date().toLocaleString()}\\n\\n`;\n  \n  if (results.critical_failures.length > 0) {\n    message += `CRITICAL FAILURES:\\n`;\n    results.critical_failures.forEach(f => {\n      message += `• ${f.workflow}: ${f.error}\\n`;\n    });\n  }\n  \n  if (results.warnings.length > 0) {\n    message += `\\nWARNINGS:\\n`;\n    results.warnings.forEach(w => {\n      message += `• ${w.workflow}: ${w.error}\\n`;\n    });\n  }\n  \n  results.alertMessage = message;\n}\n\nreturn [{ json: results }];"
+      },
+      "id": "6a62c209-a206-4f36-a430-81902f764434",
+      "name": "Analyze Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.alertMethod}}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "SMS"
+            },
+            {
+              "value2": "SLACK",
+              "output": 1
+            },
+            {
+              "value2": "LOG",
+              "output": 2
+            }
+          ]
+        }
+      },
+      "id": "979d2a16-8255-40e1-9313-b923f2f97085",
+      "name": "Route by Severity",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "from": "+14694365607",
+        "to": "+919494348091",
+        "message": "={{$json.alertMessage}}",
+        "options": {}
+      },
+      "id": "fc8b93df-4a5e-4a04-b78f-54d1900e8a60",
+      "name": "Send SMS (Critical)",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        -64,
+        -160
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "seXtNTssV0vIqTCu",
+          "name": "Twilio account Full"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@quantumops.com",
+        "toEmail": "={{ $env.ALERT_EMAIL || 'admin@example.com' }}",
+        "subject": "🔔 Appointment System Health Alert - {{$json.severity}}",
+        "text": "={{$json.alertMessage}}\\n\\nFull Report:\\n{{JSON.stringify($json, null, 2)}}",
+        "options": {}
+      },
+      "id": "c9fc2cd7-0eb9-4968-a1ab-8311eebb2030",
+      "name": "Send Email (High)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        -160
+      ],
+      "webhookId": "97a1d0da-c2da-4157-b553-881746b97c97",
+      "credentials": {
+        "smtp": {
+          "id": "hyKIPT70eutIOjdE",
+          "name": "SMTP Gmail"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "=1ewZhow8YltZJy9cNynnZ6-ei5v32XuRHKV8rPJ9l6JI",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "System Health Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{$json.timestamp}}",
+            "Severity": "={{$json.severity}}",
+            "Health_Percentage": "={{$json.healthPercentage}}",
+            "Healthy_Count": "={{$json.healthy}}",
+            "Unhealthy_Count": "={{$json.unhealthy}}",
+            "Critical_Failures": "={{JSON.stringify($json.critical_failures)}}",
+            "Warnings": "={{JSON.stringify($json.warnings)}}",
+            "Alert_Sent": "={{$json.alertMethod}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Severity",
+              "displayName": "Severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Health_Percentage",
+              "displayName": "Health_Percentage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Healthy_Count",
+              "displayName": "Healthy_Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Unhealthy_Count",
+              "displayName": "Unhealthy_Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Critical_Failures",
+              "displayName": "Critical_Failures",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Warnings",
+              "displayName": "Warnings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alert_Sent",
+              "displayName": "Alert_Sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e746684f-c7d6-449d-98cc-7a9df21973fa",
+      "name": "Log to Sheets (Warning)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -64,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PQRbHs2eHA4g1ECp",
+          "name": "My_Qops_Mail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "=1ewZhow8YltZJy9cNynnZ6-ei5v32XuRHKV8rPJ9l6JI",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "System Health Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{$json.timestamp}}",
+            "Severity": "OK",
+            "Health_Percentage": "100.0",
+            "Healthy_Count": "={{$json.healthy}}",
+            "Unhealthy_Count": "0",
+            "Critical_Failures": "[]",
+            "Warnings": "[]",
+            "Alert_Sent": "NONE"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Severity",
+              "displayName": "Severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Health_Percentage",
+              "displayName": "Health_Percentage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Healthy_Count",
+              "displayName": "Healthy_Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Unhealthy_Count",
+              "displayName": "Unhealthy_Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Critical_Failures",
+              "displayName": "Critical_Failures",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Warnings",
+              "displayName": "Warnings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alert_Sent",
+              "displayName": "Alert_Sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "0496e2dc-0273-40ff-8e74-10db375b43da",
+      "name": "Log Healthy Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -288,
+        320
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PQRbHs2eHA4g1ECp",
+          "name": "My_Qops_Mail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C09V81BJ71B",
+          "mode": "list",
+          "cachedResultName": "system-alerts-appointment_ai"
+        },
+        "text": "={{$json.alertMessage}}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        -64,
+        32
+      ],
+      "id": "004977d6-7e9b-4986-b2f7-8e84bac8bdec",
+      "name": "Send a message (High)",
+      "webhookId": "a9cc72fc-5d03-4fc0-b5fa-b2b86b1ce61c",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "3sgNBOVwJzPBaO6j",
+          "name": "Slack account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "39d84c3c-21b9-4fce-a594-61ccf1df0a49",
+              "leftValue": "={{$json.severity}}",
+              "rightValue": "OK",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -560,
+        112
+      ],
+      "id": "db56d6ad-88ea-48f0-8b23-90a6b1c62e26",
+      "name": "If"
+    }
+  ],
+  "pinData": {
+    "Every 5 Minutes": [
+      {
+        "json": {
+          "timestamp": "2025-11-26T03:55:12.001-06:00",
+          "Readable date": "November 26th 2025, 3:55:12 am",
+          "Readable time": "3:55:12 am",
+          "Day of week": "Wednesday",
+          "Year": "2025",
+          "Month": "November",
+          "Day of month": "26",
+          "Hour": "03",
+          "Minute": "55",
+          "Second": "12",
+          "Timezone": "America/Chicago (UTC-06:00)"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Prepare Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Health Checks": {
+      "main": [
+        [
+          {
+            "node": "Check Webhook Endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Webhook Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Analyze Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Results": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Severity": {
+      "main": [
+        [
+          {
+            "node": "Send SMS (Critical)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a message (High)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log to Sheets (Warning)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Sheets (Warning)": {
+      "main": [
+        []
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Route by Severity",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Healthy Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "464f23bc-9a21-4882-9fde-60a17339b324",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "hDYa9QHUb1puXBys",
+  "tags": [
+    {
+      "name": "monitoring",
+      "id": "RmlDAdx8NXtUdRuw",
+      "updatedAt": "2025-11-26T06:09:33.003Z",
+      "createdAt": "2025-11-26T06:09:33.003Z"
+    }
+  ]
+}

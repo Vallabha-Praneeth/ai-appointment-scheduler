@@ -1,0 +1,322 @@
+{
+  "name": "Smart Reminder System - 24h",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger - Daily 9 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate tomorrow's date range\nconst now = new Date();\nconst tomorrow = new Date(now);\ntomorrow.setDate(tomorrow.getDate() + 1);\n\n// Start of tomorrow (00:00:00)\nconst tomorrowStart = new Date(tomorrow);\ntomorrowStart.setHours(0, 0, 0, 0);\n\n// End of tomorrow (23:59:59)\nconst tomorrowEnd = new Date(tomorrow);\ntomorrowEnd.setHours(23, 59, 59, 999);\n\n// Format for Google Calendar API (ISO 8601)\nconst timeMin = tomorrowStart.toISOString();\nconst timeMax = tomorrowEnd.toISOString();\n\nreturn {\n  timeMin,\n  timeMax,\n  tomorrowDate: tomorrow.toISOString().split('T')[0]\n};"
+      },
+      "id": "calc-tomorrow",
+      "name": "Calculate Tomorrow's Date Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "event",
+        "operation": "getAll",
+        "calendarId": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $json.timeMin }}",
+          "timeMax": "={{ $json.timeMax }}",
+          "singleEvents": true,
+          "orderBy": "startTime"
+        }
+      },
+      "id": "get-calendar-events",
+      "name": "Get Tomorrow's Appointments",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "your-google-calendar-credentials-id",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter and extract appointment data\nconst items = $input.all();\nconst appointments = [];\n\nfor (const item of items) {\n  const event = item.json;\n  \n  // Skip if no start time or already cancelled\n  if (!event.start || !event.start.dateTime || event.status === 'cancelled') {\n    continue;\n  }\n  \n  // Extract phone from description or attendees\n  let phone = '';\n  let name = '';\n  \n  // Try to get phone from description\n  if (event.description) {\n    const phoneMatch = event.description.match(/(?:phone|Phone|PHONE|tel|Tel):\\s*([+\\d\\s\\-()]+)/);\n    if (phoneMatch) {\n      phone = phoneMatch[1].replace(/[^\\d+]/g, ''); // Clean phone number\n    }\n    \n    // Try to get name from description\n    const nameMatch = event.description.match(/(?:name|Name|NAME|Customer):\\s*([^\\n]+)/);\n    if (nameMatch) {\n      name = nameMatch[1].trim();\n    }\n  }\n  \n  // Fallback to event summary for name\n  if (!name && event.summary) {\n    name = event.summary.split('-')[0].trim();\n  }\n  \n  // Skip if no phone number found\n  if (!phone) {\n    console.log(`Skipping event ${event.id} - no phone number found`);\n    continue;\n  }\n  \n  // Extract service type\n  let serviceType = 'appointment';\n  if (event.summary) {\n    const lower = event.summary.toLowerCase();\n    if (lower.includes('consultation')) serviceType = 'consultation';\n    else if (lower.includes('maintenance')) serviceType = 'maintenance';\n    else if (lower.includes('support')) serviceType = 'support';\n    else if (lower.includes('onsite')) serviceType = 'onsite';\n    else if (lower.includes('emergency')) serviceType = 'emergency';\n  }\n  \n  appointments.push({\n    bookingId: event.id,\n    phone: phone,\n    name: name,\n    appointmentTime: event.start.dateTime,\n    serviceType: serviceType,\n    summary: event.summary || 'Appointment',\n    reminderType: '24h'\n  });\n}\n\nconsole.log(`Found ${appointments.length} appointments for tomorrow`);\nreturn appointments;"
+      },
+      "id": "process-events",
+      "name": "Extract Appointment Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "documentId": {
+          "__rl": true,
+          "value": "1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Reminder_Log",
+          "mode": "list",
+          "cachedResultName": "Reminder_Log"
+        },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "get-all-reminders",
+      "name": "Get All Sent Reminders",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "your-google-sheets-credentials-id",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get current appointment from Extract Appointment Data node\nconst appointment = $('Extract Appointment Data').item.json;\n\n// Get all reminder log rows\nconst allReminders = $input.all();\n\n// Check if 24h reminder already sent for this booking\nlet reminderFound = false;\n\nfor (const item of allReminders) {\n  const row = item.json;\n  \n  // Match on bookingId AND reminderType\n  if (row.bookingId === appointment.bookingId && \n      row.reminderType === '24h') {\n    reminderFound = true;\n    console.log(`24h reminder already sent for booking: ${appointment.bookingId}`);\n    break;\n  }\n}\n\n// Return appointment data with check result\nreturn {\n  ...appointment,\n  rowCount: reminderFound ? 1 : 0\n};"
+      },
+      "id": "check-reminder-sent",
+      "name": "Check If 24h Reminder Sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "reminder-not-sent",
+              "leftValue": "={{ $json.rowCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-not-sent",
+      "name": "If Reminder Not Sent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format appointment time for SMS\nconst appointmentTime = new Date($json.appointmentTime);\nconst options = { \n  weekday: 'long',\n  hour: 'numeric', \n  minute: '2-digit',\n  hour12: true,\n  timeZone: 'America/Chicago'\n};\n\nconst timeFormatted = appointmentTime.toLocaleString('en-US', options);\nconst dateFormatted = appointmentTime.toLocaleDateString('en-US', { \n  month: 'long', \n  day: 'numeric',\n  timeZone: 'America/Chicago'\n});\n\n// Build SMS message\nconst message = `Hi ${$json.name}!\n\nReminder: You have a ${$json.serviceType} appointment tomorrow (${dateFormatted}) at ${timeFormatted.split(', ')[1]}.\n\nNeed to reschedule or cancel? Call us at +14694365607.\n\n- Alex (Your appointment assistant)`;\n\nreturn {\n  ...$json,\n  smsMessage: message,\n  timeFormatted: timeFormatted.split(', ')[1],\n  dateFormatted: dateFormatted\n};"
+      },
+      "id": "format-message",
+      "name": "Format SMS Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "resource": "sms",
+        "operation": "send",
+        "from": "+14694365607",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.smsMessage }}",
+        "options": {}
+      },
+      "id": "send-sms",
+      "name": "Send SMS Reminder",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [2000, 200],
+      "credentials": {
+        "twilioApi": {
+          "id": "your-twilio-credentials-id",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Reminder_Log",
+          "mode": "list",
+          "cachedResultName": "Reminder_Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "bookingId": "={{ $json.bookingId }}",
+            "phone": "={{ $json.phone }}",
+            "name": "={{ $json.name }}",
+            "appointmentTime": "={{ $json.appointmentTime }}",
+            "reminderType": "24h",
+            "sentAt": "={{ new Date().toISOString() }}",
+            "status": "sent"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-reminder",
+      "name": "Log Sent Reminder",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [2220, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "your-google-sheets-credentials-id",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger - Daily 9 AM": {
+      "main": [
+        [
+          {
+            "node": "Calculate Tomorrow's Date Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Tomorrow's Date Range": {
+      "main": [
+        [
+          {
+            "node": "Get Tomorrow's Appointments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tomorrow's Appointments": {
+      "main": [
+        [
+          {
+            "node": "Extract Appointment Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Appointment Data": {
+      "main": [
+        [
+          {
+            "node": "Get All Sent Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Sent Reminders": {
+      "main": [
+        [
+          {
+            "node": "Check If 24h Reminder Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If 24h Reminder Sent": {
+      "main": [
+        [
+          {
+            "node": "If Reminder Not Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Reminder Not Sent": {
+      "main": [
+        [
+          {
+            "node": "Format SMS Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format SMS Message": {
+      "main": [
+        [
+          {
+            "node": "Send SMS Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS Reminder": {
+      "main": [
+        [
+          {
+            "node": "Log Sent Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-27T00:00:00.000Z",
+  "versionId": "1"
+}

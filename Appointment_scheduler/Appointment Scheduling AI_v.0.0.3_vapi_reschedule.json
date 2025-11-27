@@ -5,18 +5,25 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "vapi/reschedule",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -1376,
+        -1488,
         -16
       ],
       "id": "6836f8af-01cd-42a2-9d12-ec9d695ce994",
       "name": "Webhook",
-      "webhookId": "59119106-54d5-46a0-adb5-f2276685082f"
+      "webhookId": "59119106-54d5-46a0-adb5-f2276685082f",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mtbZQ3YR4VQJHsPz",
+          "name": "Webhook Secret"
+        }
+      }
     },
     {
       "parameters": {
@@ -288,20 +295,6 @@
     },
     {
       "parameters": {
-        "jsCode": "// 1) toolCallId from the inbound Webhook\nconst callId =\n  $item(0).$node[\"Webhook\"]?.json?.body?.message?.toolCalls?.[0]?.id ||\n  $item(0).$node[\"Webhook\"]?.json?.body?.message?.toolCallList?.[0]?.id ||\n  \"\";\n\n// 2) Upstream payload (whatever the branch produced)\nconst src = Array.isArray($json) ? $json[0] : $json;\n\n// 3) Normalize minimally without changing your semantics\nlet norm = src;\n\n// If a branch forgot `result`, infer a safe value\nif (!norm.result) {\n  if (norm.slot?.start && norm.slot?.end) {\n    norm = { ...norm, result: \"rescheduled\" };\n  } else {\n    norm = { ...norm, result: \"need_time\" };\n  }\n}\n\n// Optional: protect against hard errors\nconst isErr = norm.result === \"error\" || !!norm.error;\n\n// 4) Emit Vapi envelope with STRING payload\nreturn [{\n  json: {\n    results: [{\n      toolCallId: callId,\n      [isErr ? \"error\" : \"result\"]: JSON.stringify(norm)\n    }]\n  }\n}];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        224,
-        480
-      ],
-      "id": "10e30b71-e975-4d17-a213-bf908a7ed73a",
-      "name": "Vapi Wrapper (Reschedule)",
-      "disabled": true
-    },
-    {
-      "parameters": {
         "jsCode": "  // 1) toolCallId from the inbound Webhook\n  let callId = \"\";\n  try {\n    const webhook = $item(0).$node[\"Webhook\"];\n    if (webhook && webhook.json && webhook.json.body &&\n  webhook.json.body.message) {\n      const msg = webhook.json.body.message;\n      if (msg.toolCalls && msg.toolCalls[0] && msg.toolCalls[0].id) {\n        callId = msg.toolCalls[0].id;\n      } else if (msg.toolCallList && msg.toolCallList[0] &&\n  msg.toolCallList[0].id) {\n        callId = msg.toolCallList[0].id;\n      }\n    }\n  } catch (e) {\n    callId = \"\";\n  }\n\n  // 2) Upstream payload (whatever the branch produced)\n  const src = Array.isArray($json) ? $json[0] : $json;\n\n  // 3) Normalize minimally without changing your semantics\n  let norm = src;\n\n  // If a branch forgot result, infer a safe value\n  if (!norm.result) {\n    if (norm.slot && norm.slot.start && norm.slot.end) {\n      norm.result = \"rescheduled\";\n    } else {\n      norm.result = \"need_time\";\n    }\n  }\n\n  // Optional: protect against hard errors\n  const isErr = norm.result === \"error\" || (norm.error ? true : false);\n\n  // 4) Emit Vapi envelope with STRING payload\n  const responseKey = isErr ? \"error\" : \"result\";\n  const response = {};\n  response.toolCallId = callId;\n  response[responseKey] = JSON.stringify(norm);\n\n  return [{\n    json: {\n      results: [response]\n    }\n  }];"
       },
       "type": "n8n-nodes-base.code",
@@ -312,6 +305,19 @@
       ],
       "id": "75f39b6e-5006-40ae-85be-a4192b5466a9",
       "name": "vapi wrapper"
+    },
+    {
+      "parameters": {
+        "jsCode": "// RESCHEDULE VALIDATION\n  const body = $json.body || $json;\n  const args = body?.message?.toolCalls?.[0]?.function?.arguments;\n\n  let input = {};\n  if (typeof args === 'string') {\n    try { input = JSON.parse(args); } catch (e) { input = body; }\n  } else {\n    input = args || body;\n  }\n\n  // Validate phone\n  function validatePhone(raw) {\n    if (!raw) return null;\n    const digits = String(raw).replace(/\\D/g, '');\n    if (digits.length < 7 || digits.length > 15) return null;\n    if (digits.length === 10) return '+1' + digits;\n    if (digits.length === 11 && digits[0] === '1') return '+' + digits;\n    return '+' + digits;\n  }\n\n  // Sanitize text\n  function sanitize(raw) {\n    if (!raw) return null;\n    return String(raw).replace(/[<>\\\"\\'&]/g, '').trim().substring(0, 200);\n  }\n\n  // Validate ISO datetime\n  function validateDateTime(raw) {\n    if (!raw) return null;\n    const date = new Date(String(raw).trim());\n    if (isNaN(date.getTime())) return null;\n    return date.toISOString();\n  }\n\n  // Validate timezone\n  function validateTimezone(raw) {\n    if (!raw) return 'America/Chicago';\n    try {\n      Intl.DateTimeFormat(undefined, { timeZone: raw });\n      return raw;\n    } catch (e) {\n      return 'America/Chicago';\n    }\n  }\n\n  const validated = {\n    phone: validatePhone(input.phone),\n    bookingId: sanitize(input.bookingId),\n    newStartIso: validateDateTime(input.newStartIso || input.startIso),\n    newEndIso: validateDateTime(input.newEndIso || input.endIso),\n    timezone: validateTimezone(input.timezone || input.tz),\n    confirm: input.confirm || \"\"\n  };\n\n  return { json: { ...$json, ...validated, _validated: true } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1328,
+        -16
+      ],
+      "id": "52746ec3-7f75-4704-8537-d51d1d79af3b",
+      "name": "Validate Input"
     }
   ],
   "pinData": {
@@ -1042,7 +1048,7 @@
       "main": [
         [
           {
-            "node": "Normalise body",
+            "node": "Validate Input",
             "type": "main",
             "index": 0
           }
@@ -1196,16 +1202,22 @@
         []
       ]
     },
-    "Vapi Wrapper (Reschedule)": {
-      "main": [
-        []
-      ]
-    },
     "vapi wrapper": {
       "main": [
         [
           {
             "node": "Respond (init)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Normalise body",
             "type": "main",
             "index": 0
           }
@@ -1217,7 +1229,7 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "560787eb-0428-496f-a3aa-d09c4e921757",
+  "versionId": "fbe2ad5b-dc03-4594-8cf1-066dda1b5f90",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
