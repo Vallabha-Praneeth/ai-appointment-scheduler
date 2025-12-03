@@ -1,0 +1,216 @@
+{
+  "name": "Analytics Data Collector",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-daily",
+      "name": "Schedule - Daily Midnight",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate date range: Last 30 days\nconst now = new Date();\nconst thirtyDaysAgo = new Date(now);\nthirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);\n\n// Set to start of day\nthirtyDaysAgo.setHours(0, 0, 0, 0);\n\n// Format for Google Calendar API (ISO 8601)\nconst timeMin = thirtyDaysAgo.toISOString();\nconst timeMax = now.toISOString();\n\nconsole.log(`Fetching appointments from ${timeMin} to ${timeMax}`);\n\nreturn {\n  timeMin,\n  timeMax,\n  collectionDate: now.toISOString()\n};"
+      },
+      "id": "calc-date-range",
+      "name": "Calculate Date Range (30 days)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "event",
+        "operation": "getAll",
+        "calendarId": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $json.timeMin }}",
+          "timeMax": "={{ $json.timeMax }}",
+          "singleEvents": true,
+          "orderBy": "startTime"
+        }
+      },
+      "id": "get-all-appointments",
+      "name": "Get All Appointments (30 days)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "your-google-calendar-credentials-id",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Transform calendar events into analytics data\nconst items = $input.all();\nconst analyticsData = [];\n\nfor (const item of items) {\n  const event = item.json;\n  \n  // Skip if no start time or cancelled before it happened\n  if (!event.start || !event.start.dateTime) {\n    continue;\n  }\n  \n  const startTime = new Date(event.start.dateTime);\n  const endTime = event.end ? new Date(event.end.dateTime) : null;\n  const now = new Date();\n  \n  // Extract data from description\n  let customerName = '';\n  let phone = '';\n  let email = '';\n  let serviceType = 'Unknown';\n  \n  if (event.description) {\n    // Extract name\n    const nameMatch = event.description.match(/(?:name|Name|NAME|Customer):\\s*([^\\n]+)/);\n    if (nameMatch) customerName = nameMatch[1].trim();\n    \n    // Extract phone\n    const phoneMatch = event.description.match(/(?:phone|Phone|PHONE|tel|Tel):\\s*([+\\d\\s\\-()]+)/);\n    if (phoneMatch) phone = phoneMatch[1].replace(/[^\\d+]/g, '');\n    \n    // Extract email\n    const emailMatch = event.description.match(/(?:email|Email|EMAIL):\\s*([^\\n]+)/);\n    if (emailMatch) email = emailMatch[1].trim();\n  }\n  \n  // Fallback to event summary for name\n  if (!customerName && event.summary) {\n    customerName = event.summary.split('-')[0].split(':')[1] || event.summary.split('-')[0];\n    customerName = customerName.trim();\n  }\n  \n  // Determine service type from summary\n  if (event.summary) {\n    const lower = event.summary.toLowerCase();\n    if (lower.includes('consultation')) serviceType = 'Consultation';\n    else if (lower.includes('maintenance')) serviceType = 'Maintenance';\n    else if (lower.includes('support')) serviceType = 'Support';\n    else if (lower.includes('onsite')) serviceType = 'Onsite';\n    else if (lower.includes('emergency')) serviceType = 'Emergency';\n    else if (lower.includes('group')) serviceType = 'Group Booking';\n    else serviceType = 'Standard';\n  }\n  \n  // Determine status\n  let status = 'Unknown';\n  if (event.status === 'cancelled') {\n    status = 'Cancelled';\n  } else if (startTime < now) {\n    // Appointment is in the past\n    // Check if we have attendance data (you can enhance this)\n    // For now, we'll mark as 'Completed' if not cancelled\n    status = 'Completed';\n  } else {\n    // Future appointment\n    status = 'Scheduled';\n  }\n  \n  // Calculate duration in minutes\n  const durationMinutes = endTime ? (endTime - startTime) / (1000 * 60) : 60;\n  \n  // Calculate revenue (basic estimation)\n  const revenueMap = {\n    'Consultation': 100,\n    'Maintenance': 150,\n    'Support': 75,\n    'Onsite': 200,\n    'Emergency': 250,\n    'Group Booking': 300,\n    'Standard': 100\n  };\n  const revenue = revenueMap[serviceType] || 100;\n  \n  // Extract date components\n  const dateStr = startTime.toISOString().split('T')[0];\n  const timeStr = startTime.toTimeString().split(' ')[0].substring(0, 5);\n  const dayOfWeek = startTime.toLocaleDateString('en-US', { weekday: 'long' });\n  const hour = startTime.getHours();\n  const month = startTime.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });\n  \n  analyticsData.push({\n    bookingId: event.id,\n    date: dateStr,\n    time: timeStr,\n    dayOfWeek: dayOfWeek,\n    hour: hour,\n    month: month,\n    customerName: customerName || 'Unknown',\n    phone: phone || '',\n    email: email || '',\n    serviceType: serviceType,\n    durationMinutes: durationMinutes,\n    status: status,\n    revenue: status === 'Completed' ? revenue : 0,\n    summary: event.summary || '',\n    created: event.created,\n    lastUpdated: event.updated\n  });\n}\n\nconsole.log(`Processed ${analyticsData.length} appointments for analytics`);\nreturn analyticsData;"
+      },
+      "id": "transform-data",
+      "name": "Transform to Analytics Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "clear",
+        "documentId": {
+          "__rl": true,
+          "value": "1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Analytics_Raw_Data",
+          "mode": "list",
+          "cachedResultName": "Analytics_Raw_Data"
+        },
+        "clear": {
+          "startRowNumber": 2
+        }
+      },
+      "id": "clear-old-data",
+      "name": "Clear Old Data (Keep Headers)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "your-google-sheets-credentials-id",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Analytics_Raw_Data",
+          "mode": "list",
+          "cachedResultName": "Analytics_Raw_Data"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "bookingId": "={{ $json.bookingId }}",
+            "date": "={{ $json.date }}",
+            "time": "={{ $json.time }}",
+            "dayOfWeek": "={{ $json.dayOfWeek }}",
+            "hour": "={{ $json.hour }}",
+            "month": "={{ $json.month }}",
+            "customerName": "={{ $json.customerName }}",
+            "phone": "={{ $json.phone }}",
+            "email": "={{ $json.email }}",
+            "serviceType": "={{ $json.serviceType }}",
+            "durationMinutes": "={{ $json.durationMinutes }}",
+            "status": "={{ $json.status }}",
+            "revenue": "={{ $json.revenue }}",
+            "summary": "={{ $json.summary }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "write-analytics-data",
+      "name": "Write Analytics Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [1340, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "your-google-sheets-credentials-id",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Daily Midnight": {
+      "main": [
+        [
+          {
+            "node": "Calculate Date Range (30 days)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Date Range (30 days)": {
+      "main": [
+        [
+          {
+            "node": "Get All Appointments (30 days)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Appointments (30 days)": {
+      "main": [
+        [
+          {
+            "node": "Transform to Analytics Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform to Analytics Format": {
+      "main": [
+        [
+          {
+            "node": "Clear Old Data (Keep Headers)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Old Data (Keep Headers)": {
+      "main": [
+        [
+          {
+            "node": "Write Analytics Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-27T00:00:00.000Z",
+  "versionId": "1"
+}

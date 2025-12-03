@@ -1,0 +1,491 @@
+{
+  "name": "Smart Reminder System - 4h",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// Calculate time window: 4 hours from now (with 30 min buffer)\nconst now = new Date();\n\n// Start: 3.5 hours from now (to catch appointments before exact 4h mark)\nconst windowStart = new Date(now);\nwindowStart.setHours(windowStart.getHours() + 3, windowStart.getMinutes() + 30);\n\n// End: 4.5 hours from now (to catch appointments after exact 4h mark)\nconst windowEnd = new Date(now);\nwindowEnd.setHours(windowEnd.getHours() + 4, windowEnd.getMinutes() + 30);\n\n// Format for Google Calendar API (ISO 8601)\nconst timeMin = windowStart.toISOString();\nconst timeMax = windowEnd.toISOString();\n\nconst currentTime = now.toISOString();\n\nconsole.log(`Checking for appointments between ${timeMin} and ${timeMax}`);\n\nreturn {\n  timeMin,\n  timeMax,\n  currentTime\n};"
+      },
+      "id": "7d6cf25a-9269-4a8e-9675-bdbac0da4487",
+      "name": "Calculate 4-Hour Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1824,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "quantumops9@gmail.com",
+          "mode": "list",
+          "cachedResultName": "quantumops9@gmail.com"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $json.timeMin }}",
+          "timeMax": "={{ $json.timeMax }}",
+          "singleEvents": true,
+          "orderBy": "startTime"
+        }
+      },
+      "id": "aa9f9728-e5b7-4e00-9abb-1519bc6162b1",
+      "name": "Get Upcoming Appointments",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        112
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "q8VNLUCeX67n7Bbs",
+          "name": "Qops"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Reminder_Log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "ec667f78-f083-492f-b62d-ab8afb0b05e1",
+      "name": "Get All Sent Reminders",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [
+        -1152,
+        112
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PQRbHs2eHA4g1ECp",
+          "name": "My_Qops_Mail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get current appointment from Extract Appointment Data node\nconst appointment = $('Extract Appointment Data').item.json;\n\n// Get all reminder log rows\nconst allReminders = $input.all();\n\n// Check if 4h reminder already sent for this booking\nlet reminderFound = false;\n\nfor (const item of allReminders) {\n  const row = item.json;\n  \n  // Match on bookingId AND reminderType\n  if (row.bookingId === appointment.bookingId && \n      row.reminderType === '4h') {\n    reminderFound = true;\n    console.log(`4h reminder already sent for booking: ${appointment.bookingId}`);\n    break;\n  }\n}\n\n// Return appointment data with check result\nreturn {\n  ...appointment,\n  rowCount: reminderFound ? 1 : 0\n};"
+      },
+      "id": "3f58bb9f-aaef-40ef-b4e9-fe74ffe6bd48",
+      "name": "Check If 4h Reminder Sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -944,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "reminder-not-sent-4h",
+              "leftValue": "={{ $json.rowCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1d59bdaf-b071-4ef3-bf31-f744d310538c",
+      "name": "If Reminder Not Sent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format appointment time for SMS\n  const appointmentTime = new Date($json.appointmentTime);\n\n  // Format time\n  const timeFormatted = appointmentTime.toLocaleTimeString('en-US', {\n    hour: 'numeric',\n    minute: '2-digit',\n    hour12: true,\n    timeZone: 'America/Chicago'\n  });\n\n  // Format date\n  const dateFormatted = appointmentTime.toLocaleDateString('en-US', {\n    month: 'long',\n    day: 'numeric',\n    timeZone: 'America/Chicago'\n  });\n\n  // Build SMS message\n  const message = `Hi ${$json.name}!\n\n  Reminder: You have a ${$json.serviceType} appointment tomorrow (${dateFormatted}) at ${timeFormatted}.\n\n  Need to reschedule or cancel? Call us at +14694365607.\n\n  - Alex (Your appointment assistant)`;\n\n  return {\n    ...$json,\n    smsMessage: message,\n    timeFormatted: timeFormatted,\n    dateFormatted: dateFormatted\n  };"
+      },
+      "id": "59e5a6f3-e39c-4570-8142-769288598494",
+      "name": "Format SMS Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "from": "+14694365607",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.smsMessage }}",
+        "options": {}
+      },
+      "id": "060ea39b-4ace-49f1-b249-303cf138d809",
+      "name": "Send SMS Reminder",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        -272,
+        0
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "seXtNTssV0vIqTCu",
+          "name": "Twilio account Full"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Reminder_Log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1o0uh4psHE3G21bGikv76wP6Jufj0TKz_W-VQv1QxSAc/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "bookingId": "={{ $json.bookingId }}",
+            "phone": "={{ $json.phone }}",
+            "name": "={{ $json.name }}",
+            "appointmentTime": "={{ $json.appointmentTime }}",
+            "status": "sent"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "bookingId",
+              "displayName": "bookingId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "appointmentTime",
+              "displayName": "appointmentTime",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reminderSentAt",
+              "displayName": "reminderSentAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "34a9fe91-8c2d-4b3d-be93-bd8e9af39b7c",
+      "name": "Log Sent Reminder",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [
+        144,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PQRbHs2eHA4g1ECp",
+          "name": "My_Qops_Mail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the original appointment data from Format SMS Message node\n  const appointmentData = $('Format SMS Message').item.json;\n\n  // Get the Twilio response from current input\n  const twilioResponse = $input.item.json;\n\n  // Merge both together\n  return {\n    bookingId: appointmentData.bookingId,\n    phone: appointmentData.phone,\n    name: appointmentData.name,\n    appointmentTime: appointmentData.appointmentTime,\n    reminderType: appointmentData.reminderType,\n    sentAt: new Date().toISOString(),\n    status: twilioResponse.status === 'queued' ? 'sent' : twilioResponse.status,\n    twilioSid: twilioResponse.sid\n  };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        160
+      ],
+      "id": "b19f5a30-8a97-4229-bcde-9f93099dc89f",
+      "name": "Prepare Log Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter and extract appointment data\n  const items = $input.all();\n  const appointments = [];\n\n  for (const item of items) {\n    const event = item.json;\n\n    // Skip if no start time or already cancelled\n    if (!event.start || !event.start.dateTime || event.status === 'cancelled') {\n      continue;\n    }\n\n    // Extract phone, name, and email from description\n    let phone = '';\n    let name = '';\n    let email = '';\n\n    // Try to get data from description\n    if (event.description) {\n      const phoneMatch =\n  event.description.match(/(?:phone|Phone|PHONE|tel|Tel):\\s*([+\\d\\s\\-()]+)/);\n      if (phoneMatch) {\n        phone = phoneMatch[1].replace(/[^\\d+]/g, ''); // Clean phone number\n      }\n\n      const nameMatch = event.description.match(/(?:name|Name|NAME|Customer):\\s*([^\\n]+)/);\n      if (nameMatch) {\n        name = nameMatch[1].trim();\n      }\n\n      // NEW: Extract email\n      const emailMatch = event.description.match(/(?:email|Email|EMAIL):\\s*([^\\n]+)/);\n      if (emailMatch) {\n        email = emailMatch[1].trim();\n      }\n    }\n\n    // Fallback to event summary for name\n    if (!name && event.summary) {\n      name = event.summary.split('-')[0].trim();\n    }\n\n    // Skip if no phone number found\n    if (!phone) {\n      console.log(`Skipping event ${event.id} - no phone number found`);\n      continue;\n    }\n\n    // Extract service type\n    let serviceType = 'appointment';\n    if (event.summary) {\n      const lower = event.summary.toLowerCase();\n      if (lower.includes('consultation')) serviceType = 'consultation';\n      else if (lower.includes('maintenance')) serviceType = 'maintenance';\n      else if (lower.includes('support')) serviceType = 'support';\n      else if (lower.includes('onsite')) serviceType = 'onsite';\n      else if (lower.includes('emergency')) serviceType = 'emergency';\n    }\n\n    appointments.push({\n      bookingId: event.id,\n      phone: phone,\n      name: name,\n      email: email,  // NEW: Include email\n      appointmentTime: event.start.dateTime,\n      serviceType: serviceType,\n      summary: event.summary || 'Appointment',\n      reminderType: '24h'\n    });\n  }\n\n  console.log(`Found ${appointments.length} appointments for tomorrow`);\n  return appointments;"
+      },
+      "id": "d8820942-d4af-4dc4-9b04-33e374a45cc3",
+      "name": "Extract Appointment Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1376,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get appointment data from Format SMS Message node\n  const appointment = $('Format SMS Message').item.json;\n\n  // Format date and time nicely for email\n  const appointmentTime = new Date(appointment.appointmentTime);\n\n  const formattedDate = appointmentTime.toLocaleDateString('en-US', {\n    weekday: 'long',\n    year: 'numeric',\n    month: 'long',\n    day: 'numeric',\n    timeZone: 'America/Chicago'\n  });\n\n  const formattedTime = appointmentTime.toLocaleTimeString('en-US', {\n    hour: 'numeric',\n    minute: '2-digit',\n    hour12: true,\n    timeZone: 'America/Chicago'\n  });\n\n  // Create HTML email\n  const emailHTML = `<!DOCTYPE html>\n  <html>\n  <head>\n      <meta charset=\"UTF-8\">\n      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  </head>\n  <body style=\"margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: \n  #f4f4f4;\">\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background-color: #f4f4f4; \n  padding: 20px;\">\n          <tr>\n              <td align=\"center\">\n                  <table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" \n  style=\"background-color: #ffffff; border-radius: 8px; overflow: hidden;\">\n                      \n                      <tr>\n                          <td style=\"background: linear-gradient(135deg, #667eea 0%, #764ba2\n   100%); padding: 30px; text-align: center;\">\n                              <h1 style=\"color: #ffffff; margin: 0; font-size: 24px;\">⏰ \n  Appointment Reminder</h1>\n                          </td>\n                      </tr>\n                      \n                      <tr>\n                          <td style=\"padding: 30px;\">\n                              <p style=\"font-size: 16px; color: #333333; margin: 0 0 20px \n  0;\">\n                                  Hi <strong>${appointment.name}</strong>,\n                              </p>\n                              \n                              <p style=\"font-size: 16px; color: #333333; margin: 0 0 20px \n  0;\">\n                                  This is a friendly reminder about your upcoming \n  appointment:\n                              </p>\n                              \n                              <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" \n  style=\"background-color: #f8f9fa; border-left: 4px solid #667eea; margin-bottom: 20px;\">\n                                  <tr>\n                                      <td style=\"padding: 20px;\">\n                                          <p style=\"margin: 0 0 10px \n  0;\"><strong>Date:</strong> ${formattedDate}</p>\n                                          <p style=\"margin: 0 0 10px \n  0;\"><strong>Time:</strong> ${formattedTime}</p>\n                                          <p style=\"margin: 0;\"><strong>Service:</strong> \n  ${appointment.serviceType || 'Appointment'}</p>\n                                      </td>\n                                  </tr>\n                              </table>\n                              \n                              <p style=\"font-size: 14px; color: #666666; margin: 0 0 20px \n  0;\">\n                                  We look forward to seeing you! If you need to reschedule, \n  please call us at \n                                  <a href=\"tel:+14694365607\" style=\"color: #667eea; \n  text-decoration: none;\">+1 (469) 436-5607</a>\n                              </p>\n                          </td>\n                      </tr>\n                      \n                      <tr>\n                          <td style=\"background-color: #f8f9fa; padding: 20px; text-align: \n  center; border-top: 1px solid #e9ecef;\">\n                              <p style=\"margin: 0; font-size: 12px; color: #999999;\">\n                                  This is an automated reminder. Please do not reply to this\n   email.\n                              </p>\n                          </td>\n                      </tr>\n                      \n                  </table>\n              </td>\n          </tr>\n      </table>\n  </body>\n  </html>`;\n\n  // Pass through all data plus email HTML\n  return {\n    ...$input.item.json,  // Pass through Twilio response\n    ...appointment,        // Pass through appointment data\n    emailHTML: emailHTML,\n    emailSubject: `Reminder: Appointment tomorrow at ${formattedTime}`\n  };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        -144
+      ],
+      "id": "9279f83c-8350-483f-8d58-ecd772486a3d",
+      "name": "Generate Email HTML"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.emailSubject }}",
+        "message": "={{ $json.emailHTML }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        144,
+        -144
+      ],
+      "id": "ad634a8b-6559-4b50-8fa0-d166ef402ac0",
+      "name": "Send Email Reminder",
+      "webhookId": "8e9af38f-c2c1-4aa7-be38-4b0ea09d1db4",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "rSdKnv6MNyx1KvAc",
+          "name": "My_gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */4 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c65f819a-4a03-40bc-bb7c-d73b6263ba40",
+      "name": "Schedule Trigger - Every 4 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2032,
+        112
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Calculate 4-Hour Window": {
+      "main": [
+        [
+          {
+            "node": "Get Upcoming Appointments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Upcoming Appointments": {
+      "main": [
+        [
+          {
+            "node": "Extract Appointment Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Sent Reminders": {
+      "main": [
+        [
+          {
+            "node": "Check If 4h Reminder Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If 4h Reminder Sent": {
+      "main": [
+        [
+          {
+            "node": "If Reminder Not Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Reminder Not Sent": {
+      "main": [
+        [
+          {
+            "node": "Format SMS Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format SMS Message": {
+      "main": [
+        [
+          {
+            "node": "Send SMS Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS Reminder": {
+      "main": [
+        [
+          {
+            "node": "Generate Email HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Log Data": {
+      "main": [
+        [
+          {
+            "node": "Log Sent Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Appointment Data": {
+      "main": [
+        [
+          {
+            "node": "Get All Sent Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Email HTML": {
+      "main": [
+        [
+          {
+            "node": "Send Email Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Reminder": {
+      "main": [
+        [
+          {
+            "node": "Prepare Log Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger - Every 4 Hours": {
+      "main": [
+        [
+          {
+            "node": "Calculate 4-Hour Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "b877a35b-27fe-4c29-ac12-af6763916146",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00909d7feb8e9ba37a5e201aa76b7e43bb3e29d20ad98700fd8a52c9ea9d3d68"
+  },
+  "id": "KEPFt68PM62yT6Nx",
+  "tags": []
+}
