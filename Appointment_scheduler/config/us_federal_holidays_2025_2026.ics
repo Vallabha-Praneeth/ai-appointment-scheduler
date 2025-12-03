@@ -1,0 +1,207 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//AI Appointment Scheduler//Holidays//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+
+BEGIN:VEVENT
+UID:us-holidays-2025-newyear@appointment-scheduler
+DTSTART;VALUE=DATE:20250101
+DTEND;VALUE=DATE:20250102
+SUMMARY:🎉 CLOSED - New Year's Day
+DESCRIPTION:Office closed for New Year's Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-mlk@appointment-scheduler
+DTSTART;VALUE=DATE:20250120
+DTEND;VALUE=DATE:20250121
+SUMMARY:CLOSED - Martin Luther King Jr. Day
+DESCRIPTION:Office closed for MLK Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-presidents@appointment-scheduler
+DTSTART;VALUE=DATE:20250217
+DTEND;VALUE=DATE:20250218
+SUMMARY:CLOSED - Presidents' Day
+DESCRIPTION:Office closed for Presidents' Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-memorial@appointment-scheduler
+DTSTART;VALUE=DATE:20250526
+DTEND;VALUE=DATE:20250527
+SUMMARY:CLOSED - Memorial Day
+DESCRIPTION:Office closed for Memorial Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-july4@appointment-scheduler
+DTSTART;VALUE=DATE:20250704
+DTEND;VALUE=DATE:20250705
+SUMMARY:🎆 CLOSED - Independence Day
+DESCRIPTION:Office closed for Independence Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-labor@appointment-scheduler
+DTSTART;VALUE=DATE:20250901
+DTEND;VALUE=DATE:20250902
+SUMMARY:CLOSED - Labor Day
+DESCRIPTION:Office closed for Labor Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-columbus@appointment-scheduler
+DTSTART;VALUE=DATE:20251013
+DTEND;VALUE=DATE:20251014
+SUMMARY:CLOSED - Columbus Day
+DESCRIPTION:Office closed for Columbus Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-veterans@appointment-scheduler
+DTSTART;VALUE=DATE:20251111
+DTEND;VALUE=DATE:20251112
+SUMMARY:CLOSED - Veterans Day
+DESCRIPTION:Office closed for Veterans Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-thanksgiving@appointment-scheduler
+DTSTART;VALUE=DATE:20251127
+DTEND;VALUE=DATE:20251128
+SUMMARY:🦃 CLOSED - Thanksgiving
+DESCRIPTION:Office closed for Thanksgiving (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2025-christmas@appointment-scheduler
+DTSTART;VALUE=DATE:20251225
+DTEND;VALUE=DATE:20251226
+SUMMARY:🎄 CLOSED - Christmas
+DESCRIPTION:Office closed for Christmas (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-newyear@appointment-scheduler
+DTSTART;VALUE=DATE:20260101
+DTEND;VALUE=DATE:20260102
+SUMMARY:🎉 CLOSED - New Year's Day
+DESCRIPTION:Office closed for New Year's Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-mlk@appointment-scheduler
+DTSTART;VALUE=DATE:20260119
+DTEND;VALUE=DATE:20260120
+SUMMARY:CLOSED - Martin Luther King Jr. Day
+DESCRIPTION:Office closed for MLK Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-presidents@appointment-scheduler
+DTSTART;VALUE=DATE:20260216
+DTEND;VALUE=DATE:20260217
+SUMMARY:CLOSED - Presidents' Day
+DESCRIPTION:Office closed for Presidents' Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-memorial@appointment-scheduler
+DTSTART;VALUE=DATE:20260525
+DTEND;VALUE=DATE:20260526
+SUMMARY:CLOSED - Memorial Day
+DESCRIPTION:Office closed for Memorial Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-july4@appointment-scheduler
+DTSTART;VALUE=DATE:20260703
+DTEND;VALUE=DATE:20260704
+SUMMARY:🎆 CLOSED - Independence Day (Observed)
+DESCRIPTION:Office closed for Independence Day - Observed Friday (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-labor@appointment-scheduler
+DTSTART;VALUE=DATE:20260907
+DTEND;VALUE=DATE:20260908
+SUMMARY:CLOSED - Labor Day
+DESCRIPTION:Office closed for Labor Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-columbus@appointment-scheduler
+DTSTART;VALUE=DATE:20261012
+DTEND;VALUE=DATE:20261013
+SUMMARY:CLOSED - Columbus Day
+DESCRIPTION:Office closed for Columbus Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-veterans@appointment-scheduler
+DTSTART;VALUE=DATE:20261111
+DTEND;VALUE=DATE:20261112
+SUMMARY:CLOSED - Veterans Day
+DESCRIPTION:Office closed for Veterans Day (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-thanksgiving@appointment-scheduler
+DTSTART;VALUE=DATE:20261126
+DTEND;VALUE=DATE:20261127
+SUMMARY:🦃 CLOSED - Thanksgiving
+DESCRIPTION:Office closed for Thanksgiving (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+BEGIN:VEVENT
+UID:us-holidays-2026-christmas@appointment-scheduler
+DTSTART;VALUE=DATE:20261225
+DTEND;VALUE=DATE:20261226
+SUMMARY:🎄 CLOSED - Christmas
+DESCRIPTION:Office closed for Christmas (Federal Holiday)
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+
+END:VCALENDAR
